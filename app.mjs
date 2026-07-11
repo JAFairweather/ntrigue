@@ -1,0 +1,709 @@
+// app.mjs — the Ntrigue client. One file, three jobs:
+//   render:  paint the current phase from the latest game state
+//   player:  answer prompts (as 30440 scopes), commit/reveal choices,
+//            trade secrets (as 440 grants), play the finale
+//   host:    fold action events through the reducer and re-publish state
+//
+// Everything a player sees comes from copy.mjs / deck.json / quips.json —
+// keep it that way; test/banned-words.mjs scans those files.
+
+import {
+  generateSecretKey, getPublicKey, bytesToHex, hexToBytes, qrfactory,
+} from './vendor/nostr-tools.js'
+import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
+import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now } from './net.mjs'
+import { initialState, reduce, commitHash, SCHEMA_VERSION } from './state.mjs'
+import { UI, fill } from './copy.mjs'
+
+const $ = (sel) => document.querySelector(sel)
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+
+// ---------------------------------------------------------------- context
+
+const ctx = {
+  gid: null, relays: DEFAULT_RELAYS, hostPub: null,
+  sk: null, pub: null, name: null, isHost: false,
+  net: null, content: null,
+  state: null,
+  local: null,          // persisted per-game client data (see defaults below)
+  beats: {},            // drama-beat timers already fired, by card key
+  sheet: false,         // scoring sheet open
+  ui: {},               // transient view flags (card flip, join draft…)
+  unsubs: [],
+}
+
+const localDefaults = () => ({
+  sk: null, name: null, isHost: false, hostPub: null, relays: DEFAULT_RELAYS,
+  scopes: {},           // round -> {scopeId, key, text}   (key base64)
+  pending: {},          // round -> {choice, nonce}
+  granted: {},          // round -> true (grant issued to counterpart)
+  pairsByRound: {},     // round -> my counterpart pub
+  collected: {},        // `${owner}:${round}` -> text     (my private stash)
+  lastState: null,      // host only: last published state (rejoin-proof)
+})
+
+const lsKey = () => `ntg:${ctx.gid}`
+const saveLocal = () => localStorage.setItem(lsKey(), JSON.stringify(ctx.local))
+const loadLocal = () => {
+  try { return { ...localDefaults(), ...JSON.parse(localStorage.getItem(lsKey()) || 'null') } }
+  catch { return localDefaults() }
+}
+
+const b64 = (bytes) => btoa(String.fromCharCode(...bytes))
+const unb64 = (str) => Uint8Array.from(atob(str), c => c.charCodeAt(0))
+
+// ---------------------------------------------------------------- boot
+
+async function loadContent() {
+  const [deck, quips] = await Promise.all([
+    fetch('./deck.json').then(r => r.json()),
+    fetch('./quips.json').then(r => r.json()),
+  ])
+  ctx.content = { deck, quips }
+}
+
+function parseFragment() {
+  const h = new URLSearchParams(location.hash.slice(1))
+  if (!h.get('g')) return null
+  return {
+    gid: h.get('g'),
+    relays: (h.get('r') || '').split(',').filter(Boolean).map(decodeURIComponent),
+    hostPub: h.get('h'),
+  }
+}
+
+async function main() {
+  await loadContent()
+  document.body.addEventListener('click', onTap)
+  const frag = parseFragment()
+  if (!frag) return render()          // landing
+  await enterGame(frag)
+}
+
+async function enterGame({ gid, relays, hostPub }) {
+  ctx.gid = gid
+  ctx.local = loadLocal()
+  ctx.relays = relays?.length ? relays : (ctx.local.relays || DEFAULT_RELAYS)
+  ctx.hostPub = hostPub || ctx.local.hostPub
+  if (!ctx.local.sk) { ctx.local.sk = bytesToHex(generateSecretKey()); saveLocal() }
+  ctx.sk = hexToBytes(ctx.local.sk)
+  ctx.pub = getPublicKey(ctx.sk)
+  ctx.name = ctx.local.name
+  ctx.isHost = ctx.local.isHost || ctx.pub === ctx.hostPub
+  ctx.net = new Net(ctx.relays)
+  render()                            // connecting / join screen immediately
+
+  // latest state: remote wins, host's local copy as fallback
+  const [remote] = await ctx.net.query({
+    kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)],
+  }).catch(() => [])
+  if (remote) applyStateEvent(remote)
+  else if (ctx.isHost && ctx.local.lastState) ctx.state = ctx.local.lastState
+  else if (ctx.isHost) ctx.state = initialState({ gid: ctx.gid, host: ctx.pub, relays: ctx.relays })
+  if (ctx.isHost) await hostCatchUp()
+
+  // the host is the source of truth — it never re-reads its own state events
+  if (!ctx.isHost) ctx.unsubs.push(ctx.net.subscribe(
+    [{ kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)] }],
+    applyStateEvent))
+  ctx.unsubs.push(ctx.net.subscribe(
+    [{ kinds: [1059], '#p': [ctx.pub] }],
+    () => refreshCollected()))
+  if (ctx.isHost) {
+    ctx.unsubs.push(ctx.net.subscribe(
+      [{ kinds: [KIND_APP], '#t': [ctx.gid] }],
+      (e) => hostIngest(e)))
+    if (!remote) await publishState()
+  }
+  refreshCollected()
+  render()
+  setInterval(tick, 1000)             // soft timers only
+}
+
+// ---------------------------------------------------------------- host driver
+
+let seenStateTs = 0
+function applyStateEvent(event) {
+  if (event.pubkey !== ctx.hostPub || event.created_at < seenStateTs) return
+  let s
+  try { s = JSON.parse(event.content) } catch { return }
+  if (!s || s.v !== SCHEMA_VERSION || s.gid !== ctx.gid) return
+  seenStateTs = event.created_at
+  ctx.state = s
+  onStateChanged()
+}
+
+// The host applies its own actions locally at tap time, so both the catch-up
+// query and the live feed skip host-authored events — replaying a non-
+// idempotent 'advance' would double-step the game.
+async function hostCatchUp() {
+  const events = await ctx.net.query({ kinds: [KIND_APP], '#t': [ctx.gid] }).catch(() => [])
+  let changed = false
+  for (const e of events.sort((a, b) => a.created_at - b.created_at)) {
+    if (e.pubkey === ctx.pub) continue
+    const act = parseAction(ctx.gid, e)
+    if (!act) continue
+    const next = reduce(ctx.state, act, ctx.content)
+    if (next !== ctx.state) { ctx.state = next; changed = true }
+  }
+  if (changed) await publishState()
+}
+
+function hostIngest(event) {
+  if (event.pubkey === ctx.pub) return
+  const act = parseAction(ctx.gid, event)
+  if (act) hostApply(act)
+}
+
+async function hostApply(act) {
+  const prev = ctx.state
+  const next = reduce(prev, act, ctx.content)
+  if (next === prev) return
+  if (next.phase !== prev.phase || next.outcomeStep !== prev.outcomeStep ||
+      next.finale?.turn !== prev.finale?.turn || next.finale?.step !== prev.finale?.step)
+    next.phaseAt = now()
+  ctx.state = next
+  onStateChanged()
+  await publishState()
+}
+
+async function publishState() {
+  ctx.local.lastState = ctx.state
+  saveLocal()
+  // dSuffix 'state' yields exactly dState(gid); parseAction ignores it, so
+  // the host never re-ingests its own state as an action.
+  try { await sendAction(ctx.net, ctx.sk, ctx.gid, 'state', ctx.state) }
+  catch (e) { console.error('state push failed', e) }
+}
+
+// ---------------------------------------------------------------- actions
+
+async function send(dSuffix, payload) {
+  if (ctx.isHost) await hostApply({ ...payload, pub: ctx.pub })   // snappy local apply
+  try { await sendAction(ctx.net, ctx.sk, ctx.gid, dSuffix, payload) }
+  catch (e) { console.error('send failed', e) }
+}
+
+// ---------------------------------------------------------------- reactions
+
+function onStateChanged() {
+  autoEffects().catch(console.error)
+  render()
+}
+
+async function autoEffects() {
+  const s = ctx.state
+  if (!s) return
+  const me = ctx.pub
+
+  // remember my counterpart for each round (window closes when pairs rotate)
+  if (s.pairs?.length && s.round > 0) {
+    const pair = s.pairs.find(p => p.includes(me))
+    if (pair) {
+      const other = pair[0] === me ? pair[1] : pair[0]
+      if (ctx.local.pairsByRound[s.round] !== other) {
+        ctx.local.pairsByRound[s.round] = other
+        saveLocal()
+      }
+    }
+  }
+
+  // auto-reveal once both commitments in my pair exist
+  if (s.phase === 'dilemma') {
+    const other = ctx.local.pairsByRound[s.round]
+    const mine = ctx.local.pending[s.round]
+    if (mine && !s.commits[me]) await send(`cmt:${s.round}:${me}`,
+      { type: 'commit', round: s.round, hash: commitHash(mine.choice, mine.nonce) })
+    if (mine && other && s.commits[me] && s.commits[other] && !s.choices[me])
+      await send(`rvl:${s.round}:${me}`,
+        { type: 'reveal', round: s.round, choice: mine.choice, nonce: mine.nonce })
+  }
+
+  // if I shared, deliver my secret to my counterpart — the trade itself
+  for (const [round, pend] of Object.entries(ctx.local.pending)) {
+    const r = Number(round)
+    const resolvedPast = s.round > r || (s.round === r && ['outcome', 'scoreboard', 'finale_intro', 'finale', 'final'].includes(s.phase))
+    const scope = ctx.local.scopes[r]
+    const other = ctx.local.pairsByRound[r]
+    if (pend.choice === 'SHARE' && resolvedPast && scope && other && !ctx.local.granted[r]) {
+      await grant(ctx.net, ctx.sk, other, {
+        scopeId: scope.scopeId, generation: 1, scopeKey: unb64(scope.key),
+        scopeName: `r${r}`, relayHint: ctx.relays[0],
+      })
+      ctx.local.granted[r] = true
+      saveLocal()
+    }
+  }
+}
+
+let refreshing = false
+async function refreshCollected() {
+  if (refreshing || !ctx.net) return
+  refreshing = true
+  try {
+    const grants = latestGrants(await receiveGrants(ctx.net, ctx.sk))
+    let changed = false
+    for (const g of grants) {
+      const res = await fetchScope(ctx.net, g)
+      if (res.status !== 'ok' || !res.data?.round) continue
+      const key = `${g.publisher}:${res.data.round}`
+      if (ctx.local.collected[key] !== res.data.text) {
+        ctx.local.collected[key] = res.data.text
+        changed = true
+      }
+    }
+    if (changed) { saveLocal(); render() }
+  } finally { refreshing = false }
+}
+
+// ---------------------------------------------------------------- tap handling
+
+async function onTap(ev) {
+  const el = ev.target.closest('[data-act]')
+  if (!el) return
+  const act = el.dataset.act
+  const s = ctx.state
+
+  if (act === 'new-game') return createGame()
+  if (act === 'sheet') { ctx.sheet = !ctx.sheet; return render() }
+  if (act === 'copy-link') {
+    await navigator.clipboard?.writeText(joinUrl()).catch(() => {})
+    ctx.ui.copied = true; render()
+    setTimeout(() => { ctx.ui.copied = false; render() }, 1500)
+    return
+  }
+  if (act === 'join') {
+    const name = $('#name-input')?.value?.trim().slice(0, 12)
+    if (!name) return
+    ctx.name = ctx.local.name = name
+    ctx.ui.joined = true
+    saveLocal()
+    await send(`join:${ctx.pub}`, { type: 'join', name })
+    return render()
+  }
+  if (act === 'seat-up' || act === 'seat-down') {
+    const pub = el.dataset.pub
+    const order = [...s.players].sort((a, b) => a.seat - b.seat).map(p => p.pub)
+    const i = order.indexOf(pub)
+    const j = act === 'seat-up' ? i - 1 : i + 1
+    if (j < 0 || j >= order.length) return
+    ;[order[i], order[j]] = [order[j], order[i]]
+    return send('order', { type: 'order', order })
+  }
+  if (act === 'lock-secret') {
+    const text = $('#secret-input')?.value?.trim()
+    if (!text) return
+    const scopeId = bytesToHex(crypto.getRandomValues(new Uint8Array(8)))
+    const scopeKey = newScopeKey()
+    await publishScope(ctx.net, ctx.sk, {
+      scopeId, generation: 1, scopeKey,
+      payload: { text, round: s.round, prompt: s.promptId },
+    })
+    ctx.local.scopes[s.round] = { scopeId, key: b64(scopeKey), text }
+    saveLocal()
+    await send(`ans:${s.round}:${ctx.pub}`, { type: 'answered', round: s.round })
+    return render()
+  }
+  if (act === 'choose') {
+    const choice = el.dataset.choice
+    const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
+    ctx.local.pending[s.round] = { choice, nonce }
+    saveLocal()
+    await send(`cmt:${s.round}:${ctx.pub}`,
+      { type: 'commit', round: s.round, hash: commitHash(choice, nonce) })
+    return render()
+  }
+  if (act === 'flip') { ctx.ui.flipped = !ctx.ui.flipped; return render() }
+  if (act === 'finale-pick') {
+    ctx.ui.finaleSecret = el.dataset.k          // `${owner}:${round}`
+    return render()
+  }
+  if (act === 'finale-move') {
+    const kind = el.dataset.kind
+    if (kind === 'vault') return send(`fin:${ctx.pub}`, { type: 'finale_choice', action: 'vault' })
+    const k = ctx.ui.finaleSecret
+    if (!k) return
+    const [owner, round] = [k.slice(0, 64), Number(k.slice(65))]
+    const payload = { type: 'finale_choice', action: kind, owner, round }
+    if (kind === 'burn') payload.text = ctx.local.collected[k] || ''
+    return send(`fin:${ctx.pub}`, payload)
+  }
+  if (act === 'extort-response')
+    return send(`exr:${s.finale.turn}:${ctx.pub}`,
+      { type: 'extort_response', turn: s.finale.turn, pay: el.dataset.pay === '1' })
+  if (act === 'decide') {
+    const reveal = el.dataset.reveal === '1'
+    const a = s.finale.action
+    const payload = { type: 'blackmail_decision', turn: s.finale.turn, reveal }
+    if (reveal) payload.text = ctx.local.collected[`${a.owner}:${a.round}`] || ''
+    return send(`bmd:${s.finale.turn}:${ctx.pub}`, payload)
+  }
+  if (act === 'again') { location.hash = ''; location.reload(); return }
+
+  // host controls — all funnel through the reducer
+  if (act === 'host') return send(`host:${el.dataset.t}:${now()}`, { type: el.dataset.t })
+}
+
+async function createGame() {
+  // #r=… on the landing page overrides the default tables — used by the
+  // browser test (local ws:// room) and available to power users.
+  const pre = new URLSearchParams(location.hash.slice(1))
+  const relays = (pre.get('r') || '').split(',').filter(Boolean).map(decodeURIComponent)
+  const useRelays = relays.length ? relays : DEFAULT_RELAYS
+  const gid = bytesToHex(crypto.getRandomValues(new Uint8Array(4)))
+  const sk = generateSecretKey()
+  const local = {
+    ...localDefaults(),
+    sk: bytesToHex(sk), isHost: true,
+    hostPub: getPublicKey(sk), relays: useRelays,
+  }
+  localStorage.setItem(`ntg:${gid}`, JSON.stringify(local))
+  location.hash = `g=${gid}&r=${useRelays.map(encodeURIComponent).join(',')}&h=${local.hostPub}`
+  location.reload()
+}
+
+// ---------------------------------------------------------------- render
+
+const joinUrl = () => location.origin + location.pathname +
+  `#g=${ctx.gid}&r=${ctx.relays.map(encodeURIComponent).join(',')}&h=${ctx.hostPub}`
+
+const nameOf = (pub) => ctx.state?.players.find(p => p.pub === pub)?.name || '?'
+const seated = () => [...(ctx.state?.players || [])].sort((a, b) => a.seat - b.seat)
+const myPair = () => ctx.state?.pairs.find(p => p.includes(ctx.pub))
+const counterpart = () => { const p = myPair(); return p ? (p[0] === ctx.pub ? p[1] : p[0]) : null }
+const amIn = () => ctx.state?.players.some(p => p.pub === ctx.pub)
+const promptText = () => ctx.content.deck.rounds
+  .find(r => r.round === ctx.state.round)?.prompts.find(p => p.id === ctx.state.promptId)?.text || ''
+
+// drama beat: cards keyed here render "…" for 1s the first time they appear
+function beat(key) {
+  if (ctx.beats[key] === 'done') return true
+  if (!ctx.beats[key]) {
+    ctx.beats[key] = setTimeout(() => { ctx.beats[key] = 'done'; render() }, 1000)
+  }
+  return false
+}
+
+function tick() {
+  const s = ctx.state
+  if (s && (s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort')))
+    render()                            // countdown repaint
+}
+
+function timerLeft(total) {
+  const left = total - (Math.floor(Date.now() / 1000) - (ctx.state.phaseAt || 0))
+  return Math.max(0, left)
+}
+
+function render() {
+  const app = $('#app')
+  if (!app) return
+  // A state straggle mid-typing must never eat someone's secret: snapshot
+  // input values/focus before the innerHTML rebuild, restore after.
+  const keep = {}
+  for (const id of ['secret-input', 'name-input']) {
+    const el = document.getElementById(id)
+    if (el) keep[id] = {
+      value: el.value, focus: document.activeElement === el,
+      ss: el.selectionStart, se: el.selectionEnd,
+    }
+  }
+  const s = ctx.state
+  let html
+  if (!ctx.gid) html = vLanding()
+  else if (!s) html = vCard(`<p class="mute">${esc(ctx.isHost ? UI.connecting : UI.connecting)}</p>`)
+  else if (!amIn() && s.phase === 'lobby') html = vJoin()
+  else if (!amIn()) html = vCard(`<p class="mute">${esc(UI.notFound)}</p>`)
+  else html = ({
+    lobby: vLobby, prompt: vPrompt, pairing: vPairing, dilemma: vDilemma,
+    outcome: vOutcome, scoreboard: vScoreboard, finale_intro: vFinaleIntro,
+    finale: vFinale, final: vFinal,
+  }[s.phase] || (() => ''))()
+  app.innerHTML = html + (ctx.gid && s ? vSheetButton() : '') + (ctx.sheet ? vSheet() : '')
+  for (const [id, k] of Object.entries(keep)) {
+    const el = document.getElementById(id)
+    if (!el) continue
+    el.value = k.value
+    if (k.focus) { el.focus(); try { el.setSelectionRange(k.ss, k.se) } catch { /* ok */ } }
+  }
+}
+
+const vCard = (inner, cls = '') => `<div class="card ${cls}">${inner}</div>`
+const btn = (label, act, data = '', cls = 'btn') =>
+  `<button class="${cls}" data-act="${act}" ${data}>${esc(label)}</button>`
+
+const vSheetButton = () => `<button class="sheet-btn" data-act="sheet">?</button>`
+const vSheet = () => `<div class="sheet"><div class="sheet-inner">
+  <h3>${esc(UI.scoringTitle)}</h3>
+  <p>${esc(UI.scoringRounds)}</p><p>${esc(UI.scoringFinale)}</p><p>${esc(UI.scoringAwards)}</p>
+  ${btn(UI.close, 'sheet')}</div></div>`
+
+function vLanding() {
+  return vCard(`
+    <h1 class="logo">${esc(UI.title)}</h1>
+    <p class="tagline">${esc(UI.tagline)}</p>
+    <p class="mute">${esc(UI.subtitle)}</p>
+    <p class="mute small">${esc(UI.createWarning)}</p>
+    ${btn(UI.newGame, 'new-game', '', 'btn hot big')}
+    <p class="small"><a href="./about.html">${esc(UI.about)}</a></p>
+  `, 'center')
+}
+
+function vJoin() {
+  if (ctx.ui.joined) return vCard(`<p class="mute">${esc(UI.lobbyWaiting)}</p>`, 'center')
+  return vCard(`
+    <h1 class="logo">${esc(UI.title)}</h1>
+    <h2>${esc(UI.joinTitle)}</h2>
+    <input id="name-input" maxlength="12" placeholder="${esc(UI.joinNamePlaceholder)}" autocomplete="given-name">
+    ${btn(UI.joinButton, 'join', '', 'btn hot big')}
+  `, 'center')
+}
+
+function vLobby() {
+  const s = ctx.state
+  const rows = seated().map((p, i, arr) => `
+    <li class="seat-row">
+      <span class="seat-n">${p.seat}</span><span class="seat-name">${esc(p.name)}</span>
+      ${ctx.isHost ? `
+        <button class="mini" data-act="seat-up" data-pub="${p.pub}" ${i === 0 ? 'disabled' : ''}>▲</button>
+        <button class="mini" data-act="seat-down" data-pub="${p.pub}" ${i === arr.length - 1 ? 'disabled' : ''}>▼</button>` : ''}
+    </li>`).join('')
+  const qr = (() => {
+    const q = qrfactory(0, 'M'); q.addData(joinUrl()); q.make()
+    return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })
+  })()
+  return vCard(`
+    <h2>${esc(UI.lobbyTitle)}</h2>
+    ${ctx.isHost ? `
+      <div class="qr">${qr}</div>
+      <p class="mute small">${esc(UI.lobbyShare)}</p>
+      ${btn(ctx.ui.copied ? UI.lobbyCopied : UI.lobbyCopyLink, 'copy-link', '', 'btn ghost')}
+      <p class="mute small">${esc(UI.createWarning)}</p>` :
+      `<p class="mute">${esc(fill(UI.joinWaitHost, { host: nameOf(ctx.hostPub) }))}</p>`}
+    <p class="mute">${esc(fill(UI.lobbySeated, { n: String(s.players.length) }))}</p>
+    ${ctx.isHost && s.players.length > 1 ? `<p class="small mute">${esc(UI.lobbySeatHint)}</p>` : ''}
+    <ul class="seats">${rows || `<li class="mute">${esc(UI.lobbyWaiting)}</li>`}</ul>
+    ${ctx.isHost ? (s.players.length >= 3
+      ? btn(UI.lobbyStart, 'host', 'data-t="start"', 'btn hot big')
+      : `<p class="mute small">${esc(UI.lobbyNeedPlayers)}</p>`) : ''}
+  `)
+}
+
+function hostBar(...buttons) {
+  if (!ctx.isHost) return ''
+  return `<div class="hostbar">${buttons.join('')}</div>`
+}
+
+function vPrompt() {
+  const s = ctx.state
+  const missing = seated().filter(p => !s.answered[p.pub]).map(p => p.name)
+  const done = s.answered[ctx.pub]
+  return vCard(`
+    <p class="kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))} · ${esc(ctx.content.deck.rounds[s.round - 1].name)}</p>
+    <h2 class="prompt">${esc(promptText())}</h2>
+    ${done ? `
+      <p class="locked">🔒 ${esc(UI.promptLocked)}</p>
+      <p class="mute">${esc(fill(UI.waitingOn, { names: missing.join(', ') || '…' }))}</p>` : `
+      <p class="mute small">${esc(UI.promptYours)}</p>
+      <textarea id="secret-input" rows="3" placeholder="${esc(UI.promptPlaceholder)}"></textarea>
+      ${btn(UI.promptLock, 'lock-secret', '', 'btn hot big')}
+      <p class="mute small">${esc(UI.phonesDown)}</p>`}
+  `) + hostBar(
+    btn(UI.hostEveryoneIn, 'host', 'data-t="override"', 'btn ghost'),
+    s.redrawsLeft ? btn(UI.hostRedraw, 'host', 'data-t="redraw"', 'btn ghost') : '')
+}
+
+function vPairing() {
+  const s = ctx.state
+  const cards = s.pairs.map(([a, b]) =>
+    `<div class="matchup">${esc(nameOf(a))} <span class="vs">⇄</span> ${esc(nameOf(b))}</div>`).join('')
+  const out = seated().filter(p => !s.pairs.flat().includes(p.pub))
+  return vCard(`
+    <p class="kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))} · ${esc(UI.pairingTitle)}</p>
+    ${cards}
+    ${out.map(p => `<p class="mute small">${esc(fill(UI.sittingOut, { name: p.name }))}</p>`).join('')}
+    <p class="quip">${esc(s.quip)}</p>
+  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+}
+
+function vDilemma() {
+  const s = ctx.state
+  const other = counterpart()
+  if (!other) return vCard(`<p class="mute">${esc(UI.dilemmaSit)}</p>`, 'center') +
+    hostBar(btn(UI.hostForce, 'host', 'data-t="force"', 'btn ghost'))
+  const left = timerLeft(15)
+  const committed = s.commits[ctx.pub] || ctx.local.pending[s.round]
+  return vCard(`
+    <p class="kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))}</p>
+    <h2>${esc(fill(UI.dilemmaVs, { name: nameOf(other) }))}</h2>
+    <p class="mute">${esc(fill(UI.dilemmaStakes, { name: nameOf(other) }))}</p>
+    ${committed ? `<p class="locked">🔒 ${esc(fill(UI.dilemmaLockedIn, { name: nameOf(other) }))}</p>` : `
+      <div class="timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>
+      <div class="choices">
+        <button class="btn choice share" data-act="choose" data-choice="SHARE">${esc(UI.dilemmaShare)}</button>
+        <button class="btn choice hold" data-act="choose" data-choice="HOLD">${esc(UI.dilemmaHold)}</button>
+      </div>`}
+  `, 'center') + hostBar(btn(UI.hostForce, 'host', 'data-t="force"', 'btn ghost'))
+}
+
+function vOutcome() {
+  const s = ctx.state
+  const o = s.outcomes[s.outcomeStep]
+  const key = `o:${s.round}:${s.outcomeStep}`
+  if (!beat(key)) return vCard(`<div class="dots">…</div>`, 'center')
+  const names = { a: nameOf(o.a), b: nameOf(o.b) }
+  let headline, sub = ''
+  if (o.kind === 'trade') headline = fill(UI.outcomeTrade, names)
+  else if (o.kind === 'stalemate') headline = fill(UI.outcomeStalemate, names)
+  else headline = fill(UI.outcomeBetrayal, { winner: nameOf(o.winner), loser: nameOf(o.loser) })
+
+  // my private reading moment, if this outcome sent me a secret
+  const iReceive = (o.kind === 'trade' && [o.a, o.b].includes(ctx.pub)) ||
+                   (o.kind === 'betrayal' && o.winner === ctx.pub)
+  const iGaveForNothing = o.kind === 'betrayal' && o.loser === ctx.pub
+  if (iReceive) {
+    const from = [o.a, o.b].find(p => p !== ctx.pub)
+    const text = ctx.local.collected[`${from}:${s.round}`]
+    sub = ctx.ui.flipped ? `
+      <div class="eyes-only">
+        <p class="kicker">${esc(UI.eyesOnly)}</p>
+        <p class="secret-text">${esc(text ?? UI.fetchingSecret)}</p>
+        <p class="mute small">${esc(UI.eyesOnlyHint)}</p>
+        ${btn(UI.gotIt, 'flip', '', 'btn ghost')}
+      </div>` :
+      btn(fill(UI.readSecret, { name: nameOf(from) }), 'flip', '', 'btn hot')
+    if (!text) refreshCollected()
+  } else if (iGaveForNothing) sub = `<p class="mute">${esc(UI.nothingReceived)}</p>`
+  return vCard(`
+    <h2 class="${o.kind === 'betrayal' ? 'hot-text' : ''}">${esc(headline)}</h2>
+    <p class="quip">${esc(o.quip)}</p>
+    ${sub}
+  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+}
+
+function scoreRows() {
+  const s = ctx.state
+  return [...seated()]
+    .sort((a, b) => (s.scores[b.pub] || 0) - (s.scores[a.pub] || 0))
+    .map(p => `<li class="score-row">
+      <span class="seat-name">${esc(p.name)}${p.pub === ctx.pub ? ' ·' : ''}</span>
+      <span class="dag">${'🗡'.repeat(s.daggers[p.pub] || 0)}</span>
+      <span class="pts">${s.scores[p.pub] || 0}</span>
+    </li>`).join('')
+}
+
+function vScoreboard() {
+  const s = ctx.state
+  return vCard(`
+    <h2>${esc(fill(UI.scoreboardTitle, { n: String(s.round) }))}</h2>
+    <ul class="scores">${scoreRows()}</ul>
+    <p class="mute small">${esc(UI.daggerLegend)}</p>
+    <p class="quip">${esc(s.quip)}</p>
+  `) + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+}
+
+function vFinaleIntro() {
+  return vCard(`
+    <h1 class="logo hot-text">${esc(UI.finaleIntroTitle)}</h1>
+    <p>${esc(UI.finaleIntroBody)}</p>
+  `, 'center') + hostBar(btn(UI.finaleIntroStart, 'host', 'data-t="advance"', 'btn hot big'))
+}
+
+function vFinale() {
+  const s = ctx.state
+  const f = s.finale
+  const actor = f.order[f.turn]
+  const meActor = actor === ctx.pub
+
+  if (f.step === 'choose') {
+    if (!meActor) return vCard(`
+      <p class="kicker">${esc(UI.finaleIntroTitle)}</p>
+      <h2>${esc(fill(UI.finaleWatching, { name: nameOf(actor) }))}</h2>
+      <p class="quip">${esc(s.quip)}</p>`, 'center')
+    const mine = (s.collected[ctx.pub] || [])
+    const items = mine.map(c => {
+      const k = `${c.owner}:${c.round}`
+      const sel = ctx.ui.finaleSecret === k
+      return `<button class="stash ${sel ? 'sel' : ''}" data-act="finale-pick" data-k="${k}">
+        ${esc(fill(UI.finaleSecretItem, { owner: nameOf(c.owner), n: String(c.round) }))}</button>`
+    }).join('')
+    const armed = !!ctx.ui.finaleSecret
+    return vCard(`
+      <h2>${esc(fill(UI.finaleYourMove, { name: ctx.name }))}</h2>
+      <p class="mute small">${esc(UI.finaleHolding)}</p>
+      <div class="stash-list">${items}</div>
+      <div class="finale-moves">
+        <button class="btn hot" data-act="finale-move" data-kind="extort" ${armed ? '' : 'disabled'}>
+          ${esc(UI.finaleExtort)}<span class="desc">${esc(UI.finaleExtortDesc)}</span></button>
+        <button class="btn" data-act="finale-move" data-kind="burn" ${armed ? '' : 'disabled'}>
+          ${esc(UI.finaleBurn)}<span class="desc">${esc(UI.finaleBurnDesc)}</span></button>
+        <button class="btn ghost" data-act="finale-move" data-kind="vault">
+          ${esc(UI.finaleVault)}<span class="desc">${esc(UI.finaleVaultDesc)}</span></button>
+      </div>`)
+  }
+
+  if (f.step === 'extort') {
+    const target = f.action.owner
+    if (target === ctx.pub) {
+      const left = timerLeft(20)
+      return vCard(`
+        <h2 class="hot-text">${esc(fill(UI.extortTitle, { blackmailer: nameOf(actor) }))}</h2>
+        <p>${esc(UI.extortDemand)}</p>
+        <div class="timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>
+        <div class="choices">
+          <button class="btn choice hold" data-act="extort-response" data-pay="1">${esc(UI.extortPay)}</button>
+          <button class="btn choice share" data-act="extort-response" data-pay="0">${esc(UI.extortRefuse)}</button>
+        </div>`, 'center')
+    }
+    return vCard(`
+      <p class="quip">${esc(s.quip)}</p>
+      <h2>${esc(fill(UI.extortTargetDeciding, { name: nameOf(target) }))}</h2>`, 'center')
+  }
+
+  if (f.step === 'decide') {
+    if (meActor) return vCard(`
+      <h2>${esc(fill(UI.decideTitle, { target: nameOf(f.action.owner) }))}</h2>
+      <div class="finale-moves">
+        <button class="btn hot" data-act="decide" data-reveal="1">
+          ${esc(UI.decideReveal)}<span class="desc">${esc(UI.decideRevealDesc)}</span></button>
+        <button class="btn ghost" data-act="decide" data-reveal="0">
+          ${esc(UI.decideFold)}<span class="desc">${esc(UI.decideFoldDesc)}</span></button>
+      </div>`)
+    return vCard(`<h2>${esc(fill(UI.decideWaiting, { name: nameOf(actor) }))}</h2>`, 'center')
+  }
+
+  // result card — with the drama beat
+  const key = `f:${f.turn}`
+  if (!beat(key)) return vCard(`<div class="dots">…</div>`, 'center')
+  const a = f.action
+  let body = ''
+  if (a.kind === 'vault' && a.auto) body = `<p>${esc(fill(UI.finaleAutoVault, { name: nameOf(actor) }))}</p>`
+  else if (a.kind === 'burn' || a.revealed) {
+    const x = s.exposed[s.exposed.length - 1]
+    body = `<div class="exposed">
+      <p class="kicker hot-text">${esc(fill(UI.exposedFrom, { owner: nameOf(x.owner), n: String(x.round) }))}</p>
+      <p class="secret-text">${esc(x.text)}</p>
+      <p class="mute small">${esc(UI.cantUntell)}</p></div>`
+  }
+  return vCard(`
+    <p class="quip big-quip">${esc(s.quip)}</p>
+    ${body}
+  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+}
+
+function vFinal() {
+  const s = ctx.state
+  return vCard(`
+    <h1 class="logo">${esc(UI.finalTitle)}</h1>
+    <ul class="scores">${scoreRows()}</ul>
+    <div class="awards">
+      <p><span class="kicker">${esc(UI.villainAward)}</span> ${esc(s.ending.villain)} ${'🗡'.repeat(s.ending.vd)}</p>
+      <p><span class="kicker">${esc(UI.suckerAward)}</span> ${esc(s.ending.sucker)}</p>
+    </div>
+    <p class="quip">${esc(s.quip)}</p>
+    ${btn(UI.playAgain, 'again', '', 'btn ghost')}
+  `)
+}
+
+main().catch(console.error)
