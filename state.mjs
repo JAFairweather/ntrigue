@@ -49,6 +49,9 @@ export function initialState({ gid, host, relays }) {
     round: 0,
     players: [],                // [{pub, name, seat}] — seat assigned at start
     promptId: null,
+    promptText: null,           // the drawn prompt's text — carries generated
+                                // prompts to players without publishing the deck
+    roast: null,                // AI MC closing roast cards (string[]) or null
     usedPrompts: [],
     redrawsLeft: 0,
     draws: 0,                   // rng counter, keeps draws deterministic
@@ -141,7 +144,7 @@ const nameOf = (state, pub) => state.players.find(p => p.pub === pub)?.name || '
 const leader = (state) =>
   [...state.players].sort((a, b) => (state.scores[b.pub] || 0) - (state.scores[a.pub] || 0))[0]
 
-const isHostAct = (t) => ['order', 'start', 'override', 'advance', 'redraw', 'force', 'stage_gone', 'sound'].includes(t)
+const isHostAct = (t) => ['order', 'start', 'override', 'advance', 'redraw', 'force', 'stage_gone', 'sound', 'mc_quip', 'mc_roast'].includes(t)
 
 const bump = (state, pub, key, n = 1) => {
   const c = state.counters[pub] = state.counters[pub] ||
@@ -205,6 +208,7 @@ function drawPrompt(state, content) {
   const chosen = pool[seed32(`draw:${state.gid}:${state.draws}`) % pool.length]
   state.draws++
   state.promptId = chosen.id
+  state.promptText = chosen.text
   state.usedPrompts.push(chosen.id)
 }
 
@@ -498,6 +502,29 @@ export function reduce(prev, act, content) {
       if (state.sound === !!act.on) return prev
       state.sound = !!act.on
       return state
+
+    // ---- AI MC upgrades (host-only). Prewritten content already shipped;
+    // these swap in a generated line when it arrives inside its budget.
+    case 'mc_quip': {
+      const text = String(act.text || '').slice(0, 300)
+      if (!text) return prev
+      if (act.slot === 'outcome') {
+        const o = state.outcomes[act.step]
+        if (state.phase !== 'outcome' || !o || state.outcomeStep !== act.step) return prev
+        o.quip = text
+        return state
+      }
+      if (act.phase !== state.phase) return prev       // stale — the card moved on
+      state.quip = text
+      return state
+    }
+    case 'mc_roast': {
+      if (state.phase !== 'final' || state.roast) return prev
+      const cards = (act.cards || []).map(c => String(c).slice(0, 400)).filter(Boolean).slice(0, 4)
+      if (!cards.length) return prev
+      state.roast = cards
+      return state
+    }
     default:
       return prev
   }

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { generateSecretKey, getPublicKey, bytesToHex } from '../vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from '../nipxx.mjs'
 import { initialState, reduce, commitHash, pairingsFor, roomCode, ARCHETYPES } from '../state.mjs'
+import { buildDeckInput, buildPublicLog, buildQuipInput, buildRoastInput, toDeckShape } from '../mc.mjs'
 import { Relay } from './relay.mjs'
 
 const content = {
@@ -96,6 +97,9 @@ for (let r = 1; r <= 4; r++) {
   assert.equal(state.phase, 'prompt')
   const pool = content.deck.rounds[r - 1].prompts.map(p => p.id)
   assert.ok(pool.includes(state.promptId), 'prompt drawn from round pool')
+  assert.equal(state.promptText,
+    content.deck.rounds[r - 1].prompts.find(p => p.id === state.promptId).text,
+    'drawn prompt text travels in public state (MC deck indirection)')
   if (r === redrawRound) {
     const before = state.promptId
     host('redraw')
@@ -268,6 +272,49 @@ assert.equal(exposedTexts.length, 2)
 const kinds = new Set(relay.events.map(e => e.kind))
 assert.deepEqual([...kinds].sort((a, b) => a - b), [1059, 30078, 30440])
 
+// ---- AI MC privacy: the input builders take only the public state, so no
+// model prompt can ever contain an unexposed secret. Prove it on this game.
+const mcInputs = [
+  buildQuipInput(state, 'betrayal', { winner: 'Marco', loser: 'James' }),
+  buildRoastInput(state),
+  buildDeckInput({ groupContext: 'two couples', spice: 2, avoid: 'health', playerNames: P.map(p => p.name) }),
+  JSON.stringify(buildPublicLog(state)),
+].join('\n')
+for (const p of P) for (let r = 1; r <= 4; r++) {
+  const text = secretText(p, r)
+  if (state.exposed.some(x => x.text === text))
+    assert.ok(mcInputs.includes(text), 'exposed secrets ARE fair game for the MC')
+  else assert.ok(!mcInputs.includes(text), `MC input must never contain: ${text}`)
+}
+
+// ---- MC deck shaping: self-check failures drop; thin rounds fall back
+const gen = {
+  rounds: [
+    { round: 1, candidates: [
+      { text: 'Gen A?', policy_ok: true, reason: 'ok' },
+      { text: 'Gen B?', policy_ok: true, reason: 'ok' },
+      { text: 'Too mean?', policy_ok: false, reason: 'targets appearance' },
+    ]},
+    { round: 2, candidates: [{ text: 'Only one?', policy_ok: true, reason: 'ok' }] },
+  ],
+}
+const shaped = toDeckShape(gen, content.deck)
+assert.deepEqual(shaped.rounds[0].prompts.map(p => p.text), ['Gen A?', 'Gen B?'])
+assert.equal(shaped.rounds[0].prompts[0].id, 100)                    // stable ids
+assert.equal(shaped.rounds[1], content.deck.rounds[1])               // <2 ok → static
+assert.equal(shaped.rounds[2], content.deck.rounds[2])               // missing → static
+
+// ---- MC quip/roast upgrades apply through the reducer, host-only, stale-safe
+{
+  let s2 = state
+  s2 = reduce(s2, { type: 'mc_roast', pub: james.pub, cards: ['Card one.', 'Card two.'] }, content)
+  assert.deepEqual(s2.roast, ['Card one.', 'Card two.'])
+  assert.equal(reduce(s2, { type: 'mc_roast', pub: james.pub, cards: ['Again'] }, content), s2)   // once
+  assert.equal(reduce(state, { type: 'mc_roast', pub: sarah.pub, cards: ['Nope'] }, content), state) // host-only
+  assert.equal(reduce(state, { type: 'mc_quip', pub: james.pub, slot: 'quip', phase: 'scoreboard', text: 'stale' }, content), state)
+}
+
 console.log('sim ok — full game, scores exact, villain/sucker right,')
 console.log('        relay saw ciphertext + wraps + public state only;')
+console.log('        MC inputs provably free of unexposed secrets;')
 console.log(`        ${relay.events.length} events, 2 deliberate reveals, 14 secrets stayed secret.`)

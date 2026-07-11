@@ -132,7 +132,7 @@ function stingers(prev, s) {
 
 const nameOf = (pub) => ctx.state?.players.find(p => p.pub === pub)?.name || '?'
 const seated = () => [...(ctx.state?.players || [])].sort((a, b) => a.seat - b.seat)
-const promptText = () => ctx.deck.rounds
+const promptText = () => ctx.state.promptText || ctx.deck.rounds
   .find(r => r.round === ctx.state.round)?.prompts.find(p => p.id === ctx.state.promptId)?.text || ''
 const timerLeft = (total) => Math.max(0, total - (Math.floor(Date.now() / 1000) - (ctx.state.phaseAt || 0)))
 
@@ -305,6 +305,20 @@ function vFinale() {
 
 function vFinal() {
   const s = ctx.state
+  // the closing roast plays card by card before the standings
+  if (s.roast) {
+    const step = Math.min(ctx.ui.roastStep ?? 0, s.roast.length)
+    if (step < s.roast.length) {
+      if (beat(`roast:${step}`, 6000)) {                // generous dwell per card
+        ctx.ui.roastStep = step + 1
+        setTimeout(render, 0)
+      }
+      return card(`
+        <p class="tv-kicker">${esc(UI.roastTitle)}</p>
+        <h1 class="tv-huge">${esc(s.roast[step])}</h1>
+      `)
+    }
+  }
   return card(`
     <h1 class="tv-logo">${esc(UI.finalTitle)}</h1>
     <ul class="tv-scores">${tvScoreRows()}</ul>
