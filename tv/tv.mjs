@@ -219,6 +219,7 @@ function vLobby() {
     <p class="tv-kicker">${esc(head)}</p>${body}
   </div>`
   const para = (...ts) => ts.map(t => `<p>${esc(t)}</p>`).join('')
+  const steps = (...ts) => ts.map((t, i) => `<p>${i + 1}. ${esc(t)}</p>`).join('')
   const payoff = [
     [UI.howtoBothShare, UI.howtoBothShareOut],
     [UI.howtoOneShares, UI.howtoOneSharesOut],
@@ -227,9 +228,10 @@ function vLobby() {
   return card(`
     <h1 class="tv-logo tv-logo-sm">${esc(UI.title)}</h1>
     <div class="tv-tiles">
-      ${tile(UI.howtoTitle, para(UI.howtoWhat, UI.howtoObjective))}
-      ${tile(UI.howtoRoundHead, `<p>${esc(UI.howtoRound)}</p>${payoff}`)}
-      ${tile(UI.howtoFinaleHead, para(UI.howtoFinale, UI.howtoTip5))}
+      ${tile(UI.howtoTitle, para(UI.howtoWhat) + steps(UI.howtoStep1, UI.howtoStep2, UI.howtoStep3))}
+      ${tile(UI.howtoRoundHead, payoff)}
+      ${tile(UI.howtoFinaleHead, steps(UI.howtoFin1, UI.howtoFin2, UI.howtoFin3) +
+        `<p class="tv-goal">${esc(UI.howtoObjective)}</p>`)}
     </div>
     <div class="tv-join">
       <div class="tv-qr">${q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}</div>

@@ -66,6 +66,11 @@ body.tv { overflow: hidden; }
 }
 .tv-payoff b { color: var(--gold); font-size: 2.5vh; letter-spacing: .06em; }
 .tv-payoff span { font-size: 2.7vh; line-height: 1.35; }
+.tv-tile .tv-goal {
+  margin-top: auto; padding-top: 1.4vh;
+  border-top: .25vh solid var(--edge);
+  color: var(--gold);
+}
 
 .tv-join { display: flex; align-items: center; gap: 3.5vw; }
 .tv-join .tv-qr { width: 15vh; padding: 1vh; }
