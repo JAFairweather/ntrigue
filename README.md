@@ -67,10 +67,13 @@ node test/e2e.mjs            # 4 real browsers + a TV stage play a complete nigh
 An enhancement, never a requirement — the phones-only game remains fully
 playable forever.
 
-- **`/tv`**: open `<site>/tv/` on any TV-connected browser and enter the
-  4-letter room code shown on the host phone (the landing page's Join flow
-  accepts codes too). The stage joins read-only with its own throwaway
-  identity.
+- **`/tv`**: open `<site>/tv/#CODE` on any TV-connected browser — the host
+  phone shows the exact address — or open bare `/tv/` and type the 4-letter
+  room code (the landing page's Join flow accepts codes too). The stage
+  joins read-only with its own throwaway identity. A code in the address
+  always beats whatever table the screen remembers, a quiet ↩ New table
+  button sits in the corner of every stage screen, and a finished or
+  hours-cold night is auto-forgotten on revisit instead of restored.
 - **Privacy by construction**: the stage renders public game state only. It
   holds no secret-reading capability, so it cannot display anything that
   hasn't been deliberately made public — asserted in both test suites

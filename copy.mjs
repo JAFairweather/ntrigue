@@ -110,11 +110,12 @@ export const UI = {
   codeJoinSearching: 'Looking for your table…',
   codeJoinNotFound: 'No table with that code right now. Check the host phone.',
 
-  tvHint: 'On your TV: open {url} and enter code {code}',
+  tvHint: 'On your TV: open {url} — it finds this table on its own.',
   tvCodeChip: '📺 {code}',
   tvEnterTitle: 'PUT THE NIGHT ON SCREEN',
   tvEnterSub: 'Enter the 4-letter code from the host phone.',
   tvConnected: 'The table is on screen.',
+  tvNewTable: 'New table',
   tvWriting: '{n} still writing…',
   tvAllIn: 'Everyone’s in.',
   tvDeciding: 'Deciding…',
