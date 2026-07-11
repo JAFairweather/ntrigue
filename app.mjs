@@ -567,16 +567,17 @@ const vPayoff = () => [
   [UI.howtoOneShares, UI.howtoOneSharesOut],
   [UI.howtoBothHold, UI.howtoBothHoldOut],
 ].map(([l, o]) => `<div class="payoff"><b>${esc(l)}</b><span class="small">${esc(o)}</span></div>`).join('')
+const vSteps = (...ts) => ts.map((t, i) => `<p class="small">${i + 1}. ${esc(t)}</p>`).join('')
 const vSheet = () => `<div class="sheet"><div class="sheet-inner">
   <h3>${esc(UI.howtoTitle)}</h3>
   <p class="small">${esc(UI.howtoWhat)}</p>
-  <p class="kicker">${esc(UI.howtoObjectiveHead)}</p>
-  <p class="small">${esc(UI.howtoObjective)}</p>
+  ${vSteps(UI.howtoStep1, UI.howtoStep2, UI.howtoStep3)}
   <p class="kicker">${esc(UI.howtoRoundHead)}</p>
-  <p class="small">${esc(UI.howtoRound)}</p>
   ${vPayoff()}
   <p class="kicker">${esc(UI.howtoFinaleHead)}</p>
-  <p class="small">${esc(UI.howtoFinale)}</p>
+  ${vSteps(UI.howtoFin1, UI.howtoFin2, UI.howtoFin3)}
+  <p class="kicker">${esc(UI.howtoObjectiveHead)}</p>
+  <p class="small">${esc(UI.howtoObjective)}</p>
   <p class="kicker">${esc(UI.howtoStrategyHead)}</p>
   <p class="small">· ${esc(UI.howtoTip1)}</p>
   <p class="small">· ${esc(UI.howtoTip2)}</p>
@@ -640,8 +641,9 @@ function vLobby() {
       `<p class="mute">${esc(fill(UI.joinWaitHost, { host: nameOf(ctx.hostPub) }))}</p>
       <p class="kicker">${esc(UI.briefTitle)}</p>
       <p class="small">${esc(UI.howtoWhat)}</p>
+      ${vSteps(UI.howtoStep1, UI.howtoStep2, UI.howtoStep3)}
       ${vPayoff()}
-      <p class="small">${esc(UI.howtoFinale)}</p>
+      <p class="small">${esc(UI.howtoFin1)} ${esc(UI.howtoFin2)} ${esc(UI.howtoFin3)}</p>
       <p class="small mute">${esc(UI.briefMore)}</p>`}
     <p class="mute">${esc(fill(UI.lobbySeated, { n: String(s.players.length) }))}</p>
     ${ctx.isHost && s.players.length > 1 ? `<p class="small mute">${esc(UI.lobbySeatHint)}</p>` : ''}
