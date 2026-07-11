@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import { generateSecretKey, getPublicKey, bytesToHex } from '../vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from '../nipxx.mjs'
-import { initialState, reduce, commitHash, pairingsFor } from '../state.mjs'
+import { initialState, reduce, commitHash, pairingsFor, roomCode, ARCHETYPES } from '../state.mjs'
 import { Relay } from './relay.mjs'
 
 const content = {
@@ -37,6 +37,26 @@ const apply = (act, expectChange = true) => {
   state = next
 }
 const host = (type) => apply({ type, pub: james.pub })
+
+// room code: derived, stable, 4 letters, no ambiguous glyphs
+assert.match(state.code, /^[A-HJKMNP-Z]{4}$/)
+assert.equal(state.code, roomCode('testgame'))
+
+// ---- a stage (TV) joins with a throwaway identity — v1, read-only
+const stageSk = generateSecretKey()
+const stagePub = getPublicKey(stageSk)
+apply({ type: 'stage_join', pub: stagePub, ts: 1000 })
+assert.equal(state.stage, true)
+apply({ type: 'stage_ping', pub: sarah.pub, ts: 2000 }, false)       // only the stage pings
+apply({ type: 'stage_ping', pub: stagePub, ts: 2000 })
+assert.equal(state.stageSeen, 2000)
+apply({ type: 'stage_gone', pub: sarah.pub }, false)                 // only the host declares it gone
+apply({ type: 'stage_gone', pub: james.pub })                        // yank the stage —
+assert.equal(state.stage, false)                                     // nothing breaks
+apply({ type: 'stage_join', pub: stagePub, ts: 3000 })               // and it can come back
+assert.equal(state.stage, true)
+apply({ type: 'sound', pub: james.pub, on: true })
+assert.equal(state.sound, true)
 
 // ---- lobby
 for (const p of P) apply({ type: 'join', pub: p.pub, name: p.name })
@@ -136,6 +156,7 @@ for (let r = 1; r <= 4; r++) {
   assert.equal(state.phase, 'outcome')
   host('advance')
   assert.equal(state.phase, 'scoreboard')
+  assert.ok(P.every(p => state.styles[p.pub]), 'everyone always has a style label')
   host('advance')
 }
 
@@ -196,6 +217,32 @@ assert.equal(state.ending.vd, 2)
 assert.equal(state.ending.sucker, 'James')
 assert.equal(state.ending.sn, 3)
 assert.ok(state.quip.includes('Marco') && state.quip.includes('James'))
+
+// ---- style profiles evolved correctly against this scripted log:
+// James was betrayed thrice (The Mark, earned R3, outlasting his R1 Open
+// Book), Sarah's extortion got paid (The Enforcer, earned at the finale),
+// Priya hit 75% shares at the last evaluation (The Open Book, newest-earned
+// over her R3 Diplomat), Marco burned one (The Anarchist — newest-earned
+// over his Shark daggers and Wildcard flip).
+assert.equal(state.styles[james.pub], ARCHETYPES.mark)
+assert.equal(state.styles[sarah.pub], ARCHETYPES.enforcer)
+assert.equal(state.styles[priya.pub], ARCHETYPES.openBook)
+assert.equal(state.styles[marco.pub], ARCHETYPES.anarchist)
+// Diplomat and Wildcard were nonetheless earned along the way
+assert.ok(state.styleHist[priya.pub][ARCHETYPES.diplomat] > 0)
+assert.ok(state.styleHist[marco.pub][ARCHETYPES.wildcard] > 0)
+assert.ok(state.styleHist[marco.pub][ARCHETYPES.shark] > 0)
+
+// ---- stage privacy by construction: its key received ZERO grants all night
+assert.equal((await receiveGrants(relay, stageSk)).length, 0,
+  'the stage key must never be granted anything')
+// and the public state it renders contains no unexposed secret
+const stateJson = JSON.stringify(state)
+for (const p of P) for (let r = 1; r <= 4; r++) {
+  const text = secretText(p, r)
+  if (!state.exposed.some(x => x.text === text))
+    assert.ok(!stateJson.includes(text), `state must not leak: ${text}`)
+}
 
 // ---- adversarial check: what does the relay operator learn?
 // Store the final public state on the relay the way the host would, then

@@ -55,24 +55,39 @@ export class Net {
 export const dState = (gid) => `ntg:${gid}:state`
 
 /** Sign + publish one game action as an addressable app-data event.
- *  `dSuffix` makes actions idempotent: re-sends replace, never duplicate. */
-export async function sendAction(net, sk, gid, dSuffix, payload) {
+ *  `dSuffix` makes actions idempotent: re-sends replace, never duplicate.
+ *  `extraTags` lets the host index its state event by room code. */
+export async function sendAction(net, sk, gid, dSuffix, payload, extraTags = []) {
   const event = finalizeEvent({
     kind: KIND_APP,
     created_at: now(),
-    tags: [['d', `ntg:${gid}:${dSuffix}`], ['t', gid]],
+    tags: [['d', `ntg:${gid}:${dSuffix}`], ['t', gid], ...extraTags],
     content: JSON.stringify(payload),
   }, sk)
   return { event, ...(await net.publish(event)) }
 }
 
 /** Parse an action event into a reducer act (author taken from the
- *  signature-verified event, never from content). */
+ *  signature-verified event, never from content; ts from created_at). */
 export function parseAction(gid, event) {
   const d = event.tags.find(t => t[0] === 'd')?.[1] || ''
   if (!d.startsWith(`ntg:${gid}:`) || d === dState(gid)) return null
   let body
   try { body = JSON.parse(event.content) } catch { return null }
   if (!body || typeof body.type !== 'string') return null
-  return { ...body, pub: event.pubkey }
+  return { ...body, pub: event.pubkey, ts: event.created_at }
+}
+
+/** Room-code lookup: the host tags its state event `['c', 'ntg-<CODE>']`.
+ *  Returns {gid, hostPub, relays} from the newest matching state, or null. */
+export const codeTag = (code) => ['c', `ntg-${code.toUpperCase()}`]
+export async function findGameByCode(net, code) {
+  const events = await net.query({ kinds: [KIND_APP], '#c': [`ntg-${code.toUpperCase()}`] })
+  for (const e of events) {
+    let s
+    try { s = JSON.parse(e.content) } catch { continue }
+    if (s?.gid && s?.host === e.pubkey)
+      return { gid: s.gid, hostPub: e.pubkey, relays: s.relays || [] }
+  }
+  return null
 }

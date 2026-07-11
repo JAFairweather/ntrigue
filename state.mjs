@@ -11,7 +11,7 @@
 
 import { sha256, bytesToHex } from './vendor/nostr-tools.js'
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 export const PHASES = ['lobby', 'prompt', 'pairing', 'dilemma', 'outcome', 'scoreboard', 'finale_intro', 'finale', 'final']
 export const ROUNDS = 4
@@ -19,11 +19,31 @@ export const ROUNDS = 4
 export const PAYOFF = { trade: 3, betrayWin: 5, betrayLose: 1, hold: 1 }
 export const FINALE = { extortPrice: 3, revealBonus: 2, burnBonus: 1, vaultBonus: 2 }
 
+// Stage (TV) client: heartbeat cadence and how stale a stage may go before
+// the host declares it gone and phones re-expand.
+export const STAGE_PING_SECS = 20
+export const STAGE_STALE_SECS = 65
+
+// Room codes: 4 glyphs from an ambiguity-free alphabet, derived from the
+// game id so every client computes the same code with no extra state.
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ'
+export function roomCode(gid) {
+  const h = sha256(new TextEncoder().encode(`code:${gid}`))
+  return [...h.slice(0, 4)].map(b => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('')
+}
+
 export function initialState({ gid, host, relays }) {
   return {
     v: SCHEMA_VERSION,
     gid, host, relays,
-    stage: false,               // v1 seam: a display client is present
+    code: roomCode(gid),        // 4-letter alias for the TV / code join
+    stage: false,               // a display (TV) client is present
+    stagePub: null, stageSeen: 0,
+    sound: false,               // stage stingers; toggled from the host phone
+    counters: {},               // pub -> {sh,ho,mu,exw,rf,bu,va,fo,s1,n1,s2,n2}
+    styles: {},                 // pub -> archetype label (evaluated each scoreboard)
+    styleHist: {}, styleSeq: 0, // newest-earned tie resolution
+    styleChange: null,          // {name, from, to} — the stage's beat
     phase: 'lobby',
     phaseAt: 0,                 // set by host on each publish (unix seconds)
     round: 0,
@@ -121,7 +141,63 @@ const nameOf = (state, pub) => state.players.find(p => p.pub === pub)?.name || '
 const leader = (state) =>
   [...state.players].sort((a, b) => (state.scores[b.pub] || 0) - (state.scores[a.pub] || 0))[0]
 
-const isHostAct = (t) => ['order', 'start', 'override', 'advance', 'redraw', 'force', 'stagehere'].includes(t)
+const isHostAct = (t) => ['order', 'start', 'override', 'advance', 'redraw', 'force', 'stage_gone', 'sound'].includes(t)
+
+const bump = (state, pub, key, n = 1) => {
+  const c = state.counters[pub] = state.counters[pub] ||
+    { sh: 0, ho: 0, mu: 0, exw: 0, rf: 0, bu: 0, va: 0, fo: 0, s1: 0, n1: 0, s2: 0, n2: 0 }
+  c[key] += n
+}
+
+// ------------------------------------------------------------ style profiles
+//
+// Rule-based archetypes from public play counters, evaluated at every
+// scoreboard and at game end. Every player always has exactly one label;
+// ties resolve to the newest-earned.
+
+export const ARCHETYPES = {
+  openBook: 'The Open Book', vault: 'The Vault', shark: 'The Shark',
+  mark: 'The Mark', diplomat: 'The Diplomat', anarchist: 'The Anarchist',
+  enforcer: 'The Enforcer', wildcard: 'The Wildcard',
+}
+
+function triggeredArchetypes(state, pub) {
+  const c = state.counters[pub] || {}
+  const n = (c.sh || 0) + (c.ho || 0)
+  const out = []
+  if (n > 0 && c.sh / n >= 0.75) out.push(ARCHETYPES.openBook)
+  if (n > 0 && c.ho / n >= 0.75) out.push(ARCHETYPES.vault)
+  if ((state.daggers[pub] || 0) >= 2) out.push(ARCHETYPES.shark)
+  const maxSuffered = Math.max(0, ...state.players.map(p => state.suffered[p.pub] || 0))
+  if (maxSuffered >= 2 && (state.suffered[pub] || 0) === maxSuffered) out.push(ARCHETYPES.mark)
+  const maxMu = Math.max(0, ...state.players.map(p => state.counters[p.pub]?.mu || 0))
+  if (maxMu >= 1 && (c.mu || 0) === maxMu) out.push(ARCHETYPES.diplomat)
+  if ((c.bu || 0) >= 1 || (c.rf || 0) >= 2) out.push(ARCHETYPES.anarchist)
+  if ((c.exw || 0) >= 1) out.push(ARCHETYPES.enforcer)
+  if (c.n1 > 0 && c.n2 > 0 && (c.s1 / c.n1 >= 0.5) !== (c.s2 / c.n2 >= 0.5))
+    out.push(ARCHETYPES.wildcard)
+  return out
+}
+
+function evalStyles(state, content) {
+  state.styleChange = null
+  for (const p of state.players) {
+    const trig = triggeredArchetypes(state, p.pub)
+    const hist = state.styleHist[p.pub] = state.styleHist[p.pub] || {}
+    for (const label of trig) if (!hist[label]) hist[label] = ++state.styleSeq
+    const c = state.counters[p.pub] || {}
+    const n = (c.sh || 0) + (c.ho || 0)
+    const label = trig.length
+      ? trig.sort((a, b) => hist[b] - hist[a])[0]                 // newest-earned wins
+      : (n > 0 && c.sh / n >= 0.5 ? ARCHETYPES.openBook : ARCHETYPES.vault)
+    const prev = state.styles[p.pub]
+    if (prev && prev !== label && !state.styleChange)
+      state.styleChange = { name: p.name, from: prev, to: label,
+        quip: quip(content, 'style_change', { name: p.name, from: prev, to: label },
+          `${state.gid}:${state.round}:${p.pub.slice(0, 8)}`) }
+    state.styles[p.pub] = label
+  }
+}
 
 function drawPrompt(state, content) {
   const pool = content.deck.rounds.find(r => r.round === state.round).prompts
@@ -159,9 +235,16 @@ function resolveRound(state, content) {
     const collect = (holder, owner) => {
       (state.collected[holder] = state.collected[holder] || []).push({ owner, round: state.round })
     }
+    for (const [pub, choice] of [[a, ca], [b, cb]]) {
+      bump(state, pub, choice === 'SHARE' ? 'sh' : 'ho')
+      const half = state.round <= 2 ? ['s1', 'n1'] : ['s2', 'n2']
+      bump(state, pub, half[1])
+      if (choice === 'SHARE') bump(state, pub, half[0])
+    }
     if (ca === 'SHARE' && cb === 'SHARE') {
       add(a, PAYOFF.trade); add(b, PAYOFF.trade)
       collect(a, b); collect(b, a)
+      bump(state, a, 'mu'); bump(state, b, 'mu')
       return { a, b, ca, cb, kind: 'trade', quip: quip(content, 'mutual_share', names, seedStr) }
     }
     if (ca === 'HOLD' && cb === 'HOLD') {
@@ -186,6 +269,7 @@ function resolveRound(state, content) {
 function toScoreboard(state, content) {
   state.phase = 'scoreboard'
   state.quip = quip(content, 'scoreboard', { leader: leader(state).name }, `${state.gid}:${state.round}`)
+  evalStyles(state, content)
 }
 
 function startFinale(state) {
@@ -206,6 +290,7 @@ function beginTurn(state) {
   if (!(state.collected[actor] || []).length) {          // nothing collected →
     f.action = { kind: 'vault', auto: true }             // non-humiliating pass
     state.scores[actor] = (state.scores[actor] || 0) + FINALE.vaultBonus
+    bump(state, actor, 'va')
     f.step = 'result'
   }
 }
@@ -225,6 +310,7 @@ function endGame(state, content) {
   }
   state.phase = 'final'
   state.quip = quip(content, 'closing', state.ending, state.gid)
+  evalStyles(state, content)
 }
 
 // ------------------------------------------------------------ the reducer
@@ -308,12 +394,14 @@ export function reduce(prev, act, content) {
       const add = (n) => { state.scores[act.pub] = (state.scores[act.pub] || 0) + n }
       if (act.action === 'vault') {
         add(FINALE.vaultBonus)
+        bump(state, act.pub, 'va')
         f().action = { kind: 'vault' }
         f().step = 'result'
         state.quip = quip(content, 'vault', { actor: nameOf(state, act.pub) }, `${state.gid}:f${f().turn}`)
       } else if (act.action === 'burn') {
         if (!owns(act.owner, act.round)) return prev
         add(FINALE.burnBonus)
+        bump(state, act.pub, 'bu')
         state.exposed.push({ owner: act.owner, round: act.round, text: String(act.text || ''), by: act.pub, how: 'burn' })
         f().action = { kind: 'burn', owner: act.owner, round: act.round }
         f().step = 'result'
@@ -334,11 +422,13 @@ export function reduce(prev, act, content) {
       if (act.pay) {
         state.scores[act.pub] = (state.scores[act.pub] || 0) - FINALE.extortPrice
         state.scores[actor()] = (state.scores[actor()] || 0) + FINALE.extortPrice
+        bump(state, actor(), 'exw')
         f().action.paid = true
         f().step = 'result'
         state.quip = quip(content, 'pay',
           { target: nameOf(state, act.pub), blackmailer: nameOf(state, actor()) }, `${state.gid}:f${f().turn}`)
       } else {
+        bump(state, act.pub, 'rf')
         f().action.refused = true
         f().step = 'decide'
       }
@@ -357,6 +447,7 @@ export function reduce(prev, act, content) {
         state.quip = quip(content, 'reveal_intro',
           { owner: nameOf(state, f().action.owner) }, `${state.gid}:f${f().turn}`)
       } else {
+        bump(state, act.pub, 'fo')
         f().action.folded = true
         state.quip = quip(content, 'fold',
           { blackmailer: nameOf(state, act.pub) }, `${state.gid}:f${f().turn}`)
@@ -383,8 +474,29 @@ export function reduce(prev, act, content) {
           return state
         default: return prev
       }
-    case 'stagehere':                                  // v1 seam — no-op in v0
-      state.stage = !!act.on
+    // ---- stage (TV) presence: join is open to any client; only the joined
+    // stage may ping; only the host may declare it gone or toggle sound.
+    case 'stage_join':
+      if (state.stagePub && state.stagePub !== act.pub) return prev   // one stage
+      state.stage = true
+      state.stagePub = act.pub
+      state.stageSeen = act.ts || 0
+      return state
+    case 'stage_ping': {
+      if (act.pub !== state.stagePub) return prev
+      const ts = act.ts || 0
+      if (ts <= state.stageSeen) return prev
+      state.stageSeen = ts
+      return state
+    }
+    case 'stage_gone':
+      if (!state.stage && !state.stagePub) return prev
+      state.stage = false
+      state.stagePub = null
+      return state
+    case 'sound':
+      if (state.sound === !!act.on) return prev
+      state.sound = !!act.on
       return state
     default:
       return prev

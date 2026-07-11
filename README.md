@@ -56,11 +56,40 @@ from the landing screen.
 ```sh
 node test/banned-words.mjs   # the language rule, over all player-visible copy
 node test/sim.mjs            # full scripted game through reducer + real crypto
-                             # + adversarial relay-observer check
-node test/e2e.mjs            # 4 real browsers play a complete night
+                             # + adversarial relay-observer + stage-privacy checks
+node test/e2e.mjs            # 4 real browsers + a TV stage play a complete night
                              # (dev deps: npm i playwright ws — not committed;
                              #  PLAYWRIGHT_CHROMIUM=<path> to override the browser)
 ```
+
+## v1 — Stage mode (M-TV)
+
+An enhancement, never a requirement — the phones-only game remains fully
+playable forever.
+
+- **`/tv`**: open `<site>/tv/` on any TV-connected browser and enter the
+  4-letter room code shown on the host phone (the landing page's Join flow
+  accepts codes too). The stage joins read-only with its own throwaway
+  identity.
+- **Privacy by construction**: the stage renders public game state only. It
+  holds no secret-reading capability, so it cannot display anything that
+  hasn't been deliberately made public — asserted in both test suites
+  (the stage key receives zero kind-440s in a full game).
+- **Style profiles**: rule-based archetypes (Open Book, Vault, Shark, Mark,
+  Diplomat, Anarchist, Enforcer, Wildcard) computed from public play
+  counters at every scoreboard; every player always has exactly one label,
+  ties resolve to the newest-earned, and evolutions get their own beat.
+- **Phones adapt** when a stage is present: drama pacing moves to the TV
+  (biggest possible), the lobby QR moves to the TV, and phones become
+  private controllers with a 📺 chip. If the TV vanishes, its heartbeat
+  goes stale, the host declares it gone, and phones re-expand on the next
+  update — nothing breaks.
+- **Sound**: short WebAudio-synthesized stingers on the stage only
+  (betrayal sting, trust chime, tension bed, reveal hit) — off by default,
+  toggled from the host phone. Phones stay silent always. (The spec
+  suggested static audio assets; synthesis keeps the app asset-free.)
+- **Connection self-check**: after creating a table, the host phone reads
+  its own first update back and warns if the connection looks one-way.
 
 ## v0.1 notes / debts
 
