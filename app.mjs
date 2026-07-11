@@ -11,8 +11,8 @@ import {
   generateSecretKey, getPublicKey, bytesToHex, hexToBytes, qrfactory,
 } from './vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
-import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now } from './net.mjs'
-import { initialState, reduce, commitHash, SCHEMA_VERSION } from './state.mjs'
+import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
+import { initialState, reduce, commitHash, SCHEMA_VERSION, STAGE_STALE_SECS } from './state.mjs'
 import { UI, fill } from './copy.mjs'
 
 const $ = (sel) => document.querySelector(sel)
@@ -114,11 +114,11 @@ async function enterGame({ gid, relays, hostPub }) {
     ctx.unsubs.push(ctx.net.subscribe(
       [{ kinds: [KIND_APP], '#t': [ctx.gid] }],
       (e) => hostIngest(e)))
-    if (!remote) await publishState()
+    if (!remote) { await publishState(); netSelfCheck() }
   }
   refreshCollected()
   render()
-  setInterval(tick, 1000)             // soft timers only
+  setInterval(tick, 1000)             // soft timers + stage watchdog
 }
 
 // ---------------------------------------------------------------- host driver
@@ -172,9 +172,22 @@ async function publishState() {
   ctx.local.lastState = ctx.state
   saveLocal()
   // dSuffix 'state' yields exactly dState(gid); parseAction ignores it, so
-  // the host never re-ingests its own state as an action.
-  try { await sendAction(ctx.net, ctx.sk, ctx.gid, 'state', ctx.state) }
-  catch (e) { console.error('state push failed', e) }
+  // the host never re-ingests its own state as an action. The `c` tag makes
+  // the game findable by its 4-letter room code (TV + code join).
+  try {
+    await sendAction(ctx.net, ctx.sk, ctx.gid, 'state', ctx.state, [codeTag(ctx.state.code)])
+  } catch (e) { console.error('state push failed', e) }
+}
+
+// One-shot connection self-check after game creation: publish went through,
+// but can it be read back? If not, friends' phones won't find the table.
+async function netSelfCheck() {
+  await new Promise(r => setTimeout(r, 2500))
+  const [back] = await ctx.net.query({
+    kinds: [KIND_APP], authors: [ctx.pub], '#d': [dState(ctx.gid)],
+  }).catch(() => [])
+  ctx.ui.netWarn = !back
+  render()
 }
 
 // ---------------------------------------------------------------- actions
@@ -340,6 +353,22 @@ async function onTap(ev) {
     return send(`bmd:${s.finale.turn}:${ctx.pub}`, payload)
   }
   if (act === 'again') { location.hash = ''; location.reload(); return }
+  if (act === 'code-join') {
+    const code = $('#code-input')?.value?.trim().toUpperCase()
+    if (!code || code.length !== 4) return
+    ctx.ui.codeSearching = true; render()
+    const pre = new URLSearchParams(location.hash.slice(1))
+    const override = (pre.get('r') || '').split(',').filter(Boolean).map(decodeURIComponent)
+    const net = new Net(override.length ? override : DEFAULT_RELAYS)
+    const found = await findGameByCode(net, code).catch(() => null)
+    net.close()
+    if (!found) { ctx.ui.codeSearching = false; ctx.ui.codeMiss = true; return render() }
+    location.hash = `g=${found.gid}&r=${found.relays.map(encodeURIComponent).join(',')}&h=${found.hostPub}`
+    location.reload()
+    return
+  }
+  if (act === 'host-sound')
+    return send(`host:sound:${now()}`, { type: 'sound', on: !s.sound })
 
   // host controls — all funnel through the reducer
   if (act === 'host') return send(`host:${el.dataset.t}:${now()}`, { type: el.dataset.t })
@@ -376,8 +405,11 @@ const amIn = () => ctx.state?.players.some(p => p.pub === ctx.pub)
 const promptText = () => ctx.content.deck.rounds
   .find(r => r.round === ctx.state.round)?.prompts.find(p => p.id === ctx.state.promptId)?.text || ''
 
-// drama beat: cards keyed here render "…" for 1s the first time they appear
+// drama beat: cards keyed here render "…" for 1s the first time they appear.
+// When a stage (TV) is present, the beat lives THERE, biggest possible —
+// phones show content immediately and stay pure controllers.
 function beat(key) {
+  if (ctx.state?.stage) return true
   if (ctx.beats[key] === 'done') return true
   if (!ctx.beats[key]) {
     ctx.beats[key] = setTimeout(() => { ctx.beats[key] = 'done'; render() }, 1000)
@@ -387,8 +419,13 @@ function beat(key) {
 
 function tick() {
   const s = ctx.state
-  if (s && (s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort')))
+  if (!s) return
+  if (s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort'))
     render()                            // countdown repaint
+  // stage watchdog: the TV heartbeats; if it goes quiet the host declares it
+  // gone and every phone re-expands on the next state event
+  if (ctx.isHost && s.stage && Math.floor(Date.now() / 1000) - (s.stageSeen || 0) > STAGE_STALE_SECS)
+    send(`host:stage_gone:${now()}`, { type: 'stage_gone' })
 }
 
 function timerLeft(total) {
@@ -420,7 +457,9 @@ function render() {
     outcome: vOutcome, scoreboard: vScoreboard, finale_intro: vFinaleIntro,
     finale: vFinale, final: vFinal,
   }[s.phase] || (() => ''))()
-  app.innerHTML = html + (ctx.gid && s ? vSheetButton() : '') + (ctx.sheet ? vSheet() : '')
+  const stageChip = s?.stage && amIn()
+    ? `<div class="stage-chip">${esc(fill(UI.tvCodeChip, { code: s.code }))}</div>` : ''
+  app.innerHTML = html + stageChip + (ctx.gid && s ? vSheetButton() : '') + (ctx.sheet ? vSheet() : '')
   for (const [id, k] of Object.entries(keep)) {
     const el = document.getElementById(id)
     if (!el) continue
@@ -446,6 +485,13 @@ function vLanding() {
     <p class="mute">${esc(UI.subtitle)}</p>
     <p class="mute small">${esc(UI.createWarning)}</p>
     ${btn(UI.newGame, 'new-game', '', 'btn hot big')}
+    <p class="mute small">${esc(UI.codeJoinLabel)}</p>
+    <div class="code-row">
+      <input id="code-input" maxlength="4" placeholder="${esc(UI.codeJoinPlaceholder)}" autocapitalize="characters" autocomplete="off">
+      ${btn(UI.codeJoinButton, 'code-join', '', 'btn ghost')}
+    </div>
+    ${ctx.ui.codeSearching ? `<p class="mute small">${esc(UI.codeJoinSearching)}</p>` : ''}
+    ${ctx.ui.codeMiss ? `<p class="mute small">${esc(UI.codeJoinNotFound)}</p>` : ''}
     <p class="small"><a href="./about.html">${esc(UI.about)}</a></p>
   `, 'center')
 }
@@ -473,12 +519,16 @@ function vLobby() {
     const q = qrfactory(0, 'M'); q.addData(joinUrl()); q.make()
     return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })
   })()
+  const tvUrl = location.origin + location.pathname.replace(/index\.html$/, '') + 'tv/'
   return vCard(`
     <h2>${esc(UI.lobbyTitle)}</h2>
     ${ctx.isHost ? `
-      <div class="qr">${qr}</div>
+      ${s.stage ? '' : `<div class="qr">${qr}</div>`}
       <p class="mute small">${esc(UI.lobbyShare)}</p>
       ${btn(ctx.ui.copied ? UI.lobbyCopied : UI.lobbyCopyLink, 'copy-link', '', 'btn ghost')}
+      <p class="mute small">${esc(fill(UI.tvHint, { url: tvUrl, code: s.code }))}</p>
+      ${s.stage ? btn(s.sound ? UI.soundOn : UI.soundOff, 'host-sound', '', 'btn ghost') : ''}
+      ${ctx.ui.netWarn ? `<p class="small hot-text">${esc(UI.netCheckWarn)}</p>` : ''}
       <p class="mute small">${esc(UI.createWarning)}</p>` :
       `<p class="mute">${esc(fill(UI.joinWaitHost, { host: nameOf(ctx.hostPub) }))}</p>`}
     <p class="mute">${esc(fill(UI.lobbySeated, { n: String(s.players.length) }))}</p>

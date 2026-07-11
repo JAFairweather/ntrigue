@@ -205,3 +205,17 @@ input:focus, textarea:focus { border-color: var(--gold); }
   display: flex; flex-direction: column; gap: 12px;
   font-size: .98rem; line-height: 1.4;
 }
+
+/* --- v1: code join + stage presence --- */
+.code-row { display: flex; gap: 10px; width: 100%; }
+.code-row input {
+  width: 7ch; text-align: center; text-transform: uppercase;
+  letter-spacing: .2em; font-size: 1.4rem; flex: none;
+}
+.code-row .btn { flex: 1; }
+.stage-chip {
+  position: fixed; top: 12px; left: 12px;
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(34,29,24,.9); border: 1px solid var(--edge);
+  color: var(--gold); font-size: .9rem;
+}

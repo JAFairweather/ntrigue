@@ -78,6 +78,12 @@
       "We can wait. We have snacks.",
       "Someone is thinking very hard. Or asleep."
     ],
+    "style_change": [
+      "{name} — {from}… no wait. {to}.",
+      "Correction for the record: {name} is now {to}.",
+      "{name} has evolved. {from} is dead; long live {to}.",
+      "The table re-reads {name}: {to}. Adjust accordingly."
+    ],
     "scoreboard": [
       "{leader} leads. For now. Nights like this turn.",
       "{leader} on top — an aura of smugness settles over the table.",

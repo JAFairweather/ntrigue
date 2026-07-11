@@ -66,6 +66,21 @@ for (const name of NAMES.slice(1)) {
   await tap(page, 'Sit down')
 }
 await see(james, '4 at the table')
+
+// ---- the TV joins by room code (v1 stage mode)
+const code = await james.evaluate(() => {
+  const gid = location.hash.match(/g=([^&]+)/)[1]
+  return JSON.parse(localStorage.getItem('ntg:' + gid)).lastState.code
+})
+const tvContext = await browser.newContext({ viewport: { width: 1280, height: 720 } })
+const tv = await tvContext.newPage()
+tv.on('pageerror', (e) => errors.push(`TV: ${e.message}`))
+tv.on('console', (m) => { if (m.type() === 'error') errors.push(`TV console: ${m.text()}`) })
+await tv.goto('http://localhost:8899/tv/index.html#r=' + encodeURIComponent('ws://localhost:7777'))
+await tv.locator('#tv-code').fill(code, T)
+await tv.getByRole('button', { name: 'Find the table' }).click(T)
+await see(tv, 'Marco')                               // lobby roster on the big screen
+await see(sarah, '📺')                               // phones flag the stage
 await tap(james, 'Start the night')
 
 // ---- four rounds; R3 has a betrayal (Marco holds on James), rest trade
@@ -82,8 +97,10 @@ for (let r = 1; r <= 4; r++) {
     const betray = r === 3 && name === 'Marco'
     await tap(pages[name], betray ? 'HOLD' : 'SHARE')
   }
-  // outcome cards (drama beat included); James reads a received secret in R1
+  // outcome cards (the drama beat lives on the stage now); James reads a
+  // received secret privately in R1 while the TV shows only the headline
   await see(james, r === 3 ? 'took' : 'traded')
+  await see(tv, r === 3 ? 'gave nothing back' : 'traded')
   if (r === 1) {
     await tap(james, 'Read Priya’s secret')          // R1 pairs James ⇄ Priya
     await see(james, 'FOR YOUR EYES ONLY')
@@ -94,6 +111,7 @@ for (let r = 1; r <= 4; r++) {
   await tap(james, 'Next')                           // outcome pair 2
   await tap(james, 'Next')                           // scoreboard
   await see(james, `Scores after round ${r}`)
+  await see(tv, 'The ')                              // style labels on stage standings
   await tap(james, 'Next')
 }
 
@@ -129,11 +147,26 @@ await tap(marco, 'Burn')
 await see(sarah, 'James secret r3')
 await tap(james, 'Next')
 
-// ---- the reckoning, on every phone
-for (const page of all) {
+// ---- the reckoning, on every phone and on the big screen
+for (const page of [...all, tv]) {
   await see(page, 'FINAL SCORES')
   await see(page, 'Villain of the night')
 }
+
+// ---- the stage saw everything public and nothing private: the two
+// deliberate reveals appear; the other 14 secrets never touched that screen
+const tvSeen = await tv.evaluate(() => document.body.innerText)
+for (const name of NAMES) for (let r = 1; r <= 4; r++) {
+  const text = `${name} secret r${r}`
+  const wasExposed = (name === 'James' && r === 3) || (name === 'Sarah' && r === 2)
+  if (!wasExposed) assert.ok(!tvSeen.includes(text), `stage must never show: ${text}`)
+}
+// and the stage key was never granted anything: no gift wrap addressed to it
+const stagePub = JSON.parse(relay.store.query({ kinds: [30078] })
+  .find(e => e.tags.some(t => t[0] === 'd' && t[1].endsWith(':state'))).content).stagePub
+assert.ok(stagePub, 'host state records the stage')
+assert.equal(relay.store.query({ kinds: [1059], '#p': [stagePub] }).length, 0,
+  'stage key received zero grants in a full game')
 // trades +3; R3 betrayal: Marco +5 / James +1; finale: reveal +2, vaults +2, burn +1
 const score = async (page, name) => Number(await page.locator('.score-row', { hasText: name }).first().locator('.pts').textContent(T))
 assert.equal(await score(james, 'James'), 3 + 3 + 1 + 3 + 2)
@@ -159,7 +192,9 @@ assert.deepEqual(errors, [], `page errors:\n${errors.join('\n')}`)
 await browser.close()
 relay.close()
 server.close()
-console.log('e2e ok — 4 phones, full night: join → 4 rounds (trades + a betrayal,')
-console.log('        private reads) → finale extort/refuse/reveal, vaults, burn →')
-console.log('        exact scores → refresh-rejoin → room stored no private plaintext.')
+console.log('e2e ok — 4 phones + TV stage, full night: code join on the big screen,')
+console.log('        4 rounds (trades + a betrayal, private reads), style labels on')
+console.log('        stage standings, finale extort/refuse/reveal + vaults + burn,')
+console.log('        exact scores, refresh-rejoin; stage key got zero grants and')
+console.log('        never showed an unexposed secret; room stored no private text.')
 process.exit(0)
