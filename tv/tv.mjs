@@ -27,9 +27,42 @@ async function main() {
   ctx.deck = await fetch('../deck.json').then(r => r.json())
   document.body.addEventListener('click', onTap)
   document.body.addEventListener('keydown', (e) => { if (e.key === 'Enter') onTap({ target: $('#tv-go') }) })
+  // a code in the address (…/tv/#ABCD) always wins over whatever this screen
+  // remembers — so pointing the TV at a new table is just opening its link
+  const urlCode = codeFromHash()
+  if (urlCode) return findAndConnect(urlCode)
   const saved = (() => { try { return JSON.parse(localStorage.getItem(LS) || 'null') } catch { return null } })()
-  if (saved?.gid) return connect(saved)
+  if (saved?.gid) return connect(saved, true)
   render()
+}
+
+function codeFromHash() {
+  const first = location.hash.slice(1).split('&')[0]
+  return /^[A-Za-z0-9]{4}$/.test(first) && !first.includes('=') ? first.toUpperCase() : null
+}
+
+async function findAndConnect(code) {
+  ctx.ui.searching = true; ctx.ui.miss = false; render()
+  // honor a #r=… override, same as the phone landing page
+  const pre = new URLSearchParams(location.hash.slice(1))
+  const override = (pre.get('r') || '').split(',').filter(Boolean).map(decodeURIComponent)
+  const probe = new Net(override.length ? override : DEFAULT_RELAYS)
+  const found = await findGameByCode(probe, code).catch(() => null)
+  probe.close()
+  ctx.ui.searching = false
+  if (!found) { ctx.ui.miss = true; return render() }
+  const conn = { ...found, sk: bytesToHex(generateSecretKey()) }
+  localStorage.setItem(LS, JSON.stringify(conn))
+  connect(conn)
+}
+
+function leave() {
+  localStorage.removeItem(LS)
+  // drop any #CODE from the address (the reload would just rejoin it),
+  // but keep a #r=… override intact
+  const r = location.hash.match(/(?:^#|&)(r=[^&]*)/)
+  history.replaceState(null, '', location.pathname + location.search + (r ? '#' + r[1] : ''))
+  location.reload()
 }
 
 async function onTap(ev) {
@@ -38,22 +71,12 @@ async function onTap(ev) {
   if (el.dataset.act === 'go') {
     const code = $('#tv-code')?.value?.trim().toUpperCase()
     if (!code || code.length !== 4) return
-    ctx.ui.searching = true; render()
-    // honor a #r=… override, same as the phone landing page
-    const pre = new URLSearchParams(location.hash.slice(1))
-    const override = (pre.get('r') || '').split(',').filter(Boolean).map(decodeURIComponent)
-    const probe = new Net(override.length ? override : DEFAULT_RELAYS)
-    const found = await findGameByCode(probe, code).catch(() => null)
-    probe.close()
-    if (!found) { ctx.ui.searching = false; ctx.ui.miss = true; return render() }
-    const conn = { ...found, sk: bytesToHex(generateSecretKey()) }
-    localStorage.setItem(LS, JSON.stringify(conn))
-    connect(conn)
+    findAndConnect(code)
   }
-  if (el.dataset.act === 'leave') { localStorage.removeItem(LS); location.reload() }
+  if (el.dataset.act === 'leave') leave()
 }
 
-async function connect({ gid, hostPub, relays, sk }) {
+async function connect({ gid, hostPub, relays, sk }, resumed = false) {
   ctx.gid = gid
   ctx.hostPub = hostPub
   ctx.relays = relays?.length ? relays : DEFAULT_RELAYS
@@ -66,6 +89,14 @@ async function connect({ gid, hostPub, relays, sk }) {
   const [remote] = await ctx.net.query({
     kinds: [KIND_APP], authors: [hostPub], '#d': [dState(gid)],
   }).catch(() => [])
+  if (resumed) {
+    // don't cling to a night that's over: if the remembered table is gone,
+    // finished, or hours cold, forget it and offer the code screen instead
+    let phase = null
+    try { phase = JSON.parse(remote?.content || 'null')?.phase } catch { /* stale */ }
+    const ageHrs = remote ? (Date.now() / 1000 - remote.created_at) / 3600 : Infinity
+    if (!remote || phase === 'final' || ageHrs > 12) return leave()
+  }
   if (remote) applyState(remote)
   ctx.net.subscribe([{ kinds: [KIND_APP], authors: [hostPub], '#d': [dState(gid)] }], applyState)
 
@@ -157,7 +188,9 @@ function render() {
     outcome: vOutcome, scoreboard: vScoreboard, finale_intro: vFinaleIntro,
     finale: vFinale, final: vFinal,
   }[s.phase] || (() => ''))()
-  stage.innerHTML = html
+  // always a way off a table — quiet corner button on every connected screen
+  const off = ctx.gid ? `<button class="tv-btn tv-leave" data-act="leave">↩ ${esc(UI.tvNewTable)}</button>` : ''
+  stage.innerHTML = html + off
 }
 
 function vEnter() {
@@ -351,7 +384,6 @@ function vFinal() {
     <p class="tv-body"><span class="tv-kicker">${esc(UI.villainAward)}</span> ${esc(s.ending.villain)} ${'🗡'.repeat(s.ending.vd)}
       · <span class="tv-kicker">${esc(UI.suckerAward)}</span> ${esc(s.ending.sucker)}</p>
     <p class="tv-quip">${esc(s.quip)}</p>
-    <button class="tv-btn" data-act="leave" style="font-size:2.5vh">↩</button>
   `)
 }
 

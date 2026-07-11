@@ -621,7 +621,7 @@ function vLobby() {
     const q = qrfactory(0, 'M'); q.addData(joinUrl()); q.make()
     return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })
   })()
-  const tvUrl = location.origin + location.pathname.replace(/index\.html$/, '') + 'tv/'
+  const tvUrl = location.origin + location.pathname.replace(/index\.html$/, '') + 'tv/#' + s.code
   return vCard(`
     <h2>${esc(UI.lobbyTitle)}</h2>
     ${ctx.isHost ? `

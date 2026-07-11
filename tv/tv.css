@@ -101,3 +101,11 @@ body.tv { overflow: hidden; }
   background: linear-gradient(160deg, var(--hot), var(--hot-dim));
   color: #fff; border: none;
 }
+
+.tv-leave {
+  position: fixed; right: 2.5vh; bottom: 2.5vh;
+  font-size: 2.2vh; padding: 1vh 2.2vh;
+  background: none; border: .3vh solid var(--edge);
+  color: var(--mute); opacity: .65;
+}
+.tv-leave:hover { opacity: 1; border-color: var(--gold); color: var(--ink); }

@@ -178,6 +178,18 @@ assert.equal(await score(james, 'Priya'), 3 * 4 + 2)
 await sarah.reload()
 await see(sarah, 'FINAL SCORES')
 
+// ---- the stage can always walk away: the corner button forgets the table
+await tv.getByRole('button', { name: 'New table' }).click(T)
+await see(tv, 'PUT THE NIGHT ON SCREEN')
+// its address can carry the code — /tv/#CODE joins that table by itself
+await tv.goto(`http://localhost:8899/tv/index.html#${code}&r=${encodeURIComponent('ws://localhost:7777')}`)
+await tv.reload()                       // goto was a fragment-only change
+await see(tv, 'FINAL SCORES')
+// and a plain revisit later doesn't cling to the finished night
+await tv.goto('http://localhost:8899/tv/index.html#r=' + encodeURIComponent('ws://localhost:7777'))
+await tv.reload()
+await see(tv, 'PUT THE NIGHT ON SCREEN')
+
 // ---- adversarial check on the live room: 14 secrets stayed ciphertext,
 // only the two deliberate reveals (blackmail + burn) are stored readable
 const stored = relay.store.events.map(e => e.content).join('\n')
@@ -195,6 +207,7 @@ server.close()
 console.log('e2e ok — 4 phones + TV stage, full night: code join on the big screen,')
 console.log('        4 rounds (trades + a betrayal, private reads), style labels on')
 console.log('        stage standings, finale extort/refuse/reveal + vaults + burn,')
-console.log('        exact scores, refresh-rejoin; stage key got zero grants and')
+console.log('        exact scores, refresh-rejoin, stage walk-away + code-in-address')
+console.log('        rejoin + finished-night auto-forget; stage key got zero grants and')
 console.log('        never showed an unexposed secret; room stored no private text.')
 process.exit(0)
