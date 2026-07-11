@@ -205,6 +205,12 @@ input:focus, textarea:focus { border-color: var(--gold); }
   display: flex; flex-direction: column; gap: 12px;
   font-size: .98rem; line-height: 1.4;
 }
+.payoff {
+  display: flex; flex-direction: column; gap: 2px;
+  padding-top: 8px; border-top: 1px solid var(--edge);
+  text-align: left; width: 100%;
+}
+.payoff b { color: var(--gold); font-size: .9rem; letter-spacing: .04em; }
 
 /* --- v1: code join + stage presence --- */
 .code-row { display: flex; gap: 10px; width: 100%; }

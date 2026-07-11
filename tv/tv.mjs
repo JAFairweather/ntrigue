@@ -215,16 +215,21 @@ function vLobby() {
   // everything at once, static: the whole game in three tiles, join info
   // beneath them, the roster filling in at the bottom
   const q = qrfactory(0, 'M'); q.addData(joinUrl()); q.make()
-  const tile = (head, ...ps) => `<div class="tv-tile">
-    <p class="tv-kicker">${esc(head)}</p>
-    ${ps.map(t => `<p>${esc(t)}</p>`).join('')}
+  const tile = (head, body) => `<div class="tv-tile">
+    <p class="tv-kicker">${esc(head)}</p>${body}
   </div>`
+  const para = (...ts) => ts.map(t => `<p>${esc(t)}</p>`).join('')
+  const payoff = [
+    [UI.howtoBothShare, UI.howtoBothShareOut],
+    [UI.howtoOneShares, UI.howtoOneSharesOut],
+    [UI.howtoBothHold, UI.howtoBothHoldOut],
+  ].map(([l, o]) => `<div class="tv-payoff"><b>${esc(l)}</b><span>${esc(o)}</span></div>`).join('')
   return card(`
     <h1 class="tv-logo tv-logo-sm">${esc(UI.title)}</h1>
     <div class="tv-tiles">
-      ${tile(UI.howtoTitle, UI.howtoWhat, UI.howtoObjective)}
-      ${tile(UI.howtoRoundHead, UI.howtoRound, UI.howtoMatrix)}
-      ${tile(UI.howtoFinaleHead, UI.howtoFinale, UI.howtoTip5)}
+      ${tile(UI.howtoTitle, para(UI.howtoWhat, UI.howtoObjective))}
+      ${tile(UI.howtoRoundHead, `<p>${esc(UI.howtoRound)}</p>${payoff}`)}
+      ${tile(UI.howtoFinaleHead, para(UI.howtoFinale, UI.howtoTip5))}
     </div>
     <div class="tv-join">
       <div class="tv-qr">${q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}</div>
