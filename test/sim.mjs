@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { generateSecretKey, getPublicKey, bytesToHex } from '../vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from '../nipxx.mjs'
 import { initialState, reduce, commitHash, pairingsFor, roomCode, ARCHETYPES } from '../state.mjs'
-import { buildDeckInput, buildPublicLog, buildQuipInput, buildRoastInput, toDeckShape } from '../mc.mjs'
+import { buildDeckInput, buildPublicLog, buildQuipInput, buildRoastInput, toDeckShape, extractJson } from '../mc.mjs'
 import { Relay } from './relay.mjs'
 
 const content = {
@@ -303,6 +303,14 @@ assert.deepEqual(shaped.rounds[0].prompts.map(p => p.text), ['Gen A?', 'Gen B?']
 assert.equal(shaped.rounds[0].prompts[0].id, 100)                    // stable ids
 assert.equal(shaped.rounds[1], content.deck.rounds[1])               // <2 ok → static
 assert.equal(shaped.rounds[2], content.deck.rounds[2])               // missing → static
+
+// ---- lenient JSON extraction (the keyless public backend is chatty)
+assert.deepEqual(extractJson('Sure! Here you go:\n{"text":"A line.","policy_ok":true,"reason":"ok"}\nEnjoy!'),
+  { text: 'A line.', policy_ok: true, reason: 'ok' })
+assert.deepEqual(extractJson('{"choices":[{"message":{"content":"hi"}}]}').choices[0].message.content, 'hi')
+assert.equal(extractJson('no json here'), null)
+assert.equal(extractJson('{broken'), null)
+assert.equal(extractJson(undefined), null)
 
 // ---- MC quip/roast upgrades apply through the reducer, host-only, stale-safe
 {

@@ -99,13 +99,31 @@ fallback path** — any API failure, timeout (2.5s for live lines), or
 `policy_ok: false` self-check silently falls back. The game never stalls
 on a model.
 
-- **Bring-your-own-key**: the host pastes an Anthropic API key in the
-  lobby's "AI host" setup. It lives in the host phone's localStorage, is
-  used only from the host client (direct browser calls to
-  `api.anthropic.com`, model `claude-opus-4-8`), and never appears in game
-  state or on the game's network. All model calls are isolated behind
-  `mc.mjs` (`generateDeck` / `liveQuip` / `closingRoast`) so a hosted
-  proxy can swap in later.
+- **Nobody has to type an API key.** The lobby's "AI host" setup offers
+  three backends, all behind the single `mc.mjs` interface
+  (`generateDeck` / `liveQuip` / `closingRoast`):
+  1. **Instant** — one tap, zero setup: a free public text endpoint
+     (`text.pollinations.ai`). Best-effort quality and uptime, and fine
+     to use precisely because MC inputs are public-only game data — an
+     unshared secret can never reach it (tested).
+  2. **This site's AI** — the site owner deploys `proxy/worker.js`
+     (Cloudflare Workers free tier) once with one low-cost Anthropic key
+     (`claude-haiku-4-5` — a full night of quips costs about a cent) and
+     ships an `mc.json` (`{"proxyUrl": ...}`, see `mc.json.example`) next
+     to `index.html`. Every host then gets quality AI with zero typing.
+     The worker pins the model, policy, schemas, and token caps, so the
+     key can't be borrowed for anything but party-game content, and
+     rate-limits per IP.
+  3. **Advanced** — the host's own Anthropic key, direct browser calls,
+     stored only in that phone's localStorage.
+
+  To deploy the proxy:
+  ```sh
+  npm create cloudflare@latest ntrigue-mc -- --type hello-world
+  cp proxy/worker.js ntrigue-mc/src/index.js
+  cd ntrigue-mc && npx wrangler secret put ANTHROPIC_API_KEY && npx wrangler deploy
+  # then: cp mc.json.example mc.json, edit proxyUrl, commit
+  ```
 - **Deck generation**: one call at game start produces the full night —
   4 rounds × 6 candidates following the v0 arc, tuned by free-text group
   context, a spice dial (1 mild / 2 spicy / 3 scorching, default 2), and

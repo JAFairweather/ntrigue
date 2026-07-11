@@ -14,7 +14,7 @@ import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeK
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
 import { initialState, reduce, commitHash, SCHEMA_VERSION, STAGE_STALE_SECS } from './state.mjs'
 import { UI, MC_UI, fill } from './copy.mjs'
-import { mcEnabled, mcSettings, saveMcSettings, generateDeck, liveQuip, closingRoast } from './mc.mjs'
+import { mcEnabled, mcMode, mcSettings, saveMcSettings, siteConfig, generateDeck, liveQuip, closingRoast } from './mc.mjs'
 
 const $ = (sel) => document.querySelector(sel)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
@@ -415,10 +415,17 @@ async function onTap(ev) {
   }
   if (act === 'host-sound')
     return send(`host:sound:${now()}`, { type: 'sound', on: !s.sound })
-  if (act === 'mc-open') { ctx.ui.mcOpen = true; return render() }
+  if (act === 'mc-open') {
+    ctx.ui.mcProxy = !!(await siteConfig())?.proxyUrl
+    ctx.ui.mcModeDraft = mcSettings().mode || 'off'
+    ctx.ui.mcOpen = true
+    return render()
+  }
   if (act === 'mc-close') { ctx.ui.mcOpen = false; return render() }
+  if (act === 'mc-mode') { ctx.ui.mcModeDraft = el.dataset.v; return render() }
   if (act === 'mc-save') {
     saveMcSettings({
+      mode: ctx.ui.mcModeDraft || 'off',
       apiKey: $('#mc-key')?.value?.trim() || '',
       groupContext: $('#mc-context')?.value?.trim() || '',
       spice: Number($('#mc-spice')?.value) || 2,
@@ -628,19 +635,30 @@ function vLobby() {
 
 function vMcModal() {
   const m = mcSettings()
+  const draft = ctx.ui.mcModeDraft || 'off'
   const opt = (v, label) => `<option value="${v}" ${(m.spice || 2) === v ? 'selected' : ''}>${esc(label)}</option>`
+  const mode = (v, label, desc) => `
+    <button class="stash ${draft === v ? 'sel' : ''}" data-act="mc-mode" data-v="${v}">
+      ${esc(label)}${desc ? `<span class="desc small mute"> — ${esc(desc)}</span>` : ''}
+    </button>`
   return `<div class="sheet"><div class="sheet-inner">
     <h3>${esc(MC_UI.title)}</h3>
     <p class="small mute">${esc(MC_UI.intro)}</p>
-    <label class="small">${esc(MC_UI.keyLabel)}</label>
-    <input id="mc-key" type="password" value="${esc(m.apiKey || '')}" autocomplete="off">
-    <p class="small mute">${esc(MC_UI.keyHint)}</p>
-    <label class="small">${esc(MC_UI.contextLabel)}</label>
-    <textarea id="mc-context" rows="2" placeholder="${esc(MC_UI.contextPlaceholder)}">${esc(m.groupContext || '')}</textarea>
-    <label class="small">${esc(MC_UI.spiceLabel)}</label>
-    <select id="mc-spice">${opt(1, MC_UI.spice1)}${opt(2, MC_UI.spice2)}${opt(3, MC_UI.spice3)}</select>
-    <label class="small">${esc(MC_UI.avoidLabel)}</label>
-    <textarea id="mc-avoid" rows="2" placeholder="${esc(MC_UI.avoidPlaceholder)}">${esc(m.avoid || '')}</textarea>
+    ${mode('off', MC_UI.modeOff, MC_UI.modeOffDesc)}
+    ${mode('community', MC_UI.modeCommunity, MC_UI.modeCommunityDesc)}
+    ${ctx.ui.mcProxy ? mode('proxy', MC_UI.modeProxy, MC_UI.modeProxyDesc) : ''}
+    ${mode('byok', MC_UI.modeByok, '')}
+    ${draft === 'byok' ? `
+      <label class="small">${esc(MC_UI.keyLabel)}</label>
+      <input id="mc-key" type="password" value="${esc(m.apiKey || '')}" autocomplete="off">
+      <p class="small mute">${esc(MC_UI.keyHint)}</p>` : ''}
+    ${draft !== 'off' ? `
+      <label class="small">${esc(MC_UI.contextLabel)}</label>
+      <textarea id="mc-context" rows="2" placeholder="${esc(MC_UI.contextPlaceholder)}">${esc(m.groupContext || '')}</textarea>
+      <label class="small">${esc(MC_UI.spiceLabel)}</label>
+      <select id="mc-spice">${opt(1, MC_UI.spice1)}${opt(2, MC_UI.spice2)}${opt(3, MC_UI.spice3)}</select>
+      <label class="small">${esc(MC_UI.avoidLabel)}</label>
+      <textarea id="mc-avoid" rows="2" placeholder="${esc(MC_UI.avoidPlaceholder)}">${esc(m.avoid || '')}</textarea>` : ''}
     ${btn(MC_UI.save, 'mc-save', '', 'btn hot')}
     ${btn(MC_UI.clear, 'mc-clear', '', 'btn ghost')}
     ${btn(MC_UI.close, 'mc-close', '', 'btn ghost')}
