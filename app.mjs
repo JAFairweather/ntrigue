@@ -562,6 +562,11 @@ const btn = (label, act, data = '', cls = 'btn') =>
   `<button class="${cls}" data-act="${act}" ${data}>${esc(label)}</button>`
 
 const vSheetButton = () => `<button class="sheet-btn" data-act="sheet">?</button>`
+const vPayoff = () => [
+  [UI.howtoBothShare, UI.howtoBothShareOut],
+  [UI.howtoOneShares, UI.howtoOneSharesOut],
+  [UI.howtoBothHold, UI.howtoBothHoldOut],
+].map(([l, o]) => `<div class="payoff"><b>${esc(l)}</b><span class="small">${esc(o)}</span></div>`).join('')
 const vSheet = () => `<div class="sheet"><div class="sheet-inner">
   <h3>${esc(UI.howtoTitle)}</h3>
   <p class="small">${esc(UI.howtoWhat)}</p>
@@ -569,7 +574,7 @@ const vSheet = () => `<div class="sheet"><div class="sheet-inner">
   <p class="small">${esc(UI.howtoObjective)}</p>
   <p class="kicker">${esc(UI.howtoRoundHead)}</p>
   <p class="small">${esc(UI.howtoRound)}</p>
-  <p class="small">${esc(UI.howtoMatrix)}</p>
+  ${vPayoff()}
   <p class="kicker">${esc(UI.howtoFinaleHead)}</p>
   <p class="small">${esc(UI.howtoFinale)}</p>
   <p class="kicker">${esc(UI.howtoStrategyHead)}</p>
@@ -635,7 +640,7 @@ function vLobby() {
       `<p class="mute">${esc(fill(UI.joinWaitHost, { host: nameOf(ctx.hostPub) }))}</p>
       <p class="kicker">${esc(UI.briefTitle)}</p>
       <p class="small">${esc(UI.howtoWhat)}</p>
-      <p class="small">${esc(UI.howtoMatrix)}</p>
+      ${vPayoff()}
       <p class="small">${esc(UI.howtoFinale)}</p>
       <p class="small mute">${esc(UI.briefMore)}</p>`}
     <p class="mute">${esc(fill(UI.lobbySeated, { n: String(s.players.length) }))}</p>

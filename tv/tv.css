@@ -43,7 +43,7 @@ body.tv { overflow: hidden; }
   text-indent: .4em;
   color: var(--gold);
 }
-.tv-logo-sm { font-size: 5vh; }
+.tv-logo-sm { font-size: 4vh; }
 
 /* lobby: the whole game in three static tiles, join info beneath */
 .tv-tiles {
@@ -59,11 +59,18 @@ body.tv { overflow: hidden; }
 }
 .tv-tile .tv-kicker { font-size: 2.4vh; }
 .tv-tile p:not(.tv-kicker) { font-size: 2.9vh; line-height: 1.4; }
+.tv-payoff {
+  border-top: .25vh solid var(--edge);
+  padding-top: 1.4vh;
+  display: flex; flex-direction: column; gap: .4vh;
+}
+.tv-payoff b { color: var(--gold); font-size: 2.5vh; letter-spacing: .06em; }
+.tv-payoff span { font-size: 2.7vh; line-height: 1.35; }
 
 .tv-join { display: flex; align-items: center; gap: 3.5vw; }
-.tv-join .tv-qr { width: 18vh; padding: 1.2vh; }
-.tv-join-col { display: flex; flex-direction: column; align-items: center; gap: 1.5vh; }
-.tv-join .tv-code { font-size: 7vh; padding: 1.2vh 3vh; }
+.tv-join .tv-qr { width: 15vh; padding: 1vh; }
+.tv-join-col { display: flex; flex-direction: column; align-items: center; gap: 1.2vh; }
+.tv-join .tv-code { font-size: 6vh; padding: 1vh 2.6vh; }
 .tv-tiles + .tv-join + .tv-roster .name { font-size: 4.6vh; padding: .8vh 2.4vh; }
 
 .tv-code {
