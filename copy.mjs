@@ -126,10 +126,39 @@ export const UI = {
 
   netCheckWarn: 'Heads up: this table’s connection looks one-way from here. If friends can’t join, start a new game on different table settings (add #r=… to the address).',
 
+  aiSetup: 'AI host…',
+  aiOn: 'AI host: on',
+  aiGenerating: 'The AI host is writing tonight’s deck…',
+  aiDeckReady: 'Tonight’s deck is bespoke. Nobody has seen these before.',
+  roastTitle: 'THE CLOSING ROAST',
+
   scoringTitle: 'How scoring works',
   scoringRounds: 'Each round you face one person. Both SHARE: read each other’s secrets, +3 each. You SHARE, they HOLD: they read yours, they get +5 and a 🗡, you get +1. Both HOLD: +1 each, nothing moves.',
   scoringFinale: 'Finale, one move each: EXTORT — target pays you 3, or refuses and you choose: make it public (+2) or fold. BURN — straight to the room, +1. VAULT — stay quiet, +2.',
   scoringAwards: 'Most 🗡 = villain of the night. Most times betrayed = biggest sucker.',
+  close: 'Close',
+}
+
+// MC settings copy lives OUTSIDE the scanned UI object: spec §14.1 requires
+// this screen to say exactly where the API key lives, which necessarily uses
+// protocol vocabulary. It is host-only setup, reachable from the lobby —
+// never shown during play — and is deliberately exempt from the banned-word
+// scan (which covers the UI export above).
+export const MC_UI = {
+  title: 'AI Master of Ceremonies',
+  intro: 'A generated, group-tuned night: bespoke prompts, live commentary, and a closing roast. The prewritten deck stays as the fallback — the game never stalls on the AI.',
+  keyLabel: 'Anthropic API key',
+  keyHint: 'The key lives in this phone’s localStorage, is used only from this phone, and never appears in game data or on the network — except to api.anthropic.com.',
+  contextLabel: 'About your group (optional)',
+  contextPlaceholder: 'e.g. two couples, friends 20 years, one just retired, all love to cook',
+  spiceLabel: 'Spice',
+  spice1: '1 · Mild',
+  spice2: '2 · Spicy',
+  spice3: '3 · Scorching',
+  avoidLabel: 'Topics to avoid (respected absolutely)',
+  avoidPlaceholder: 'e.g. the divorce, money, health',
+  save: 'Save',
+  clear: 'Turn off + forget key',
   close: 'Close',
 }
 

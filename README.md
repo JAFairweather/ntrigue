@@ -91,6 +91,42 @@ playable forever.
 - **Connection self-check**: after creating a table, the host phone reads
   its own first update back and warns if the connection looks one-way.
 
+## v1 — AI Master of Ceremonies (M-MC)
+
+Replaces the static deck and quip templates with a generated, group-tuned
+experience. **The static deck and templates remain permanently as the
+fallback path** — any API failure, timeout (2.5s for live lines), or
+`policy_ok: false` self-check silently falls back. The game never stalls
+on a model.
+
+- **Bring-your-own-key**: the host pastes an Anthropic API key in the
+  lobby's "AI host" setup. It lives in the host phone's localStorage, is
+  used only from the host client (direct browser calls to
+  `api.anthropic.com`, model `claude-opus-4-8`), and never appears in game
+  state or on the game's network. All model calls are isolated behind
+  `mc.mjs` (`generateDeck` / `liveQuip` / `closingRoast`) so a hosted
+  proxy can swap in later.
+- **Deck generation**: one call at game start produces the full night —
+  4 rounds × 6 candidates following the v0 arc, tuned by free-text group
+  context, a spice dial (1 mild / 2 spicy / 3 scorching, default 2), and
+  a topics-to-avoid list that is respected absolutely. The host's redraw
+  draws from the candidates without another API call. The generated deck
+  is logged locally on the host phone and never published — only the
+  drawn prompt's text enters public game state.
+- **Live quips**: event-triggered lines (pairings, outcomes, scoreboards,
+  extortions, folds, reveals) generated with a hard 2.5s budget against
+  the public event log only, then swapped in over the prewritten template
+  via the reducer. Stale lines (the card already moved on) are dropped.
+- **Closing roast**: one generation from the full public log, ≤150 words,
+  delivered card-by-card on the stage (and shown on phones).
+- **Content policy**: `mc-policy.md` ships in the repo as the system
+  prompt; every prompt and quip carries a structured `{text, policy_ok,
+  reason}` self-check — `policy_ok: false` → fallback, no retry loop.
+- **Privacy, tested**: the `mc.mjs` input builders accept only the public
+  reducer state, which never contains unrevealed secret text — asserted
+  end-to-end in `test/sim.mjs` (no MC input contains an unexposed secret;
+  deliberately revealed ones are fair game, alluded to rather than quoted).
+
 ## v0.1 notes / debts
 
 - Nothing from the spec's cut-list was cut: commit–reveal, full extort
@@ -103,8 +139,9 @@ playable forever.
   their own client.
 - Payoff numbers (3/5/1/1) per spec defaults — tune after tonight.
 
-## v1 seams (deliberately left)
+## Later seams (designed for, not built)
 
-- `state.mjs` schema carries a version field (`v`).
-- Deck and quips load through `content` indirection — the AI MC swaps in here.
-- `stage` client-role flag exists in state for TV/Stage mode.
+- Hosted MC proxy with metered games — `mc.mjs` is the single interface
+  the backend swaps behind.
+- 6–8 players with couple-marking, spectator role.
+- Stage sound as shipped audio assets (currently WebAudio synthesis).

@@ -13,7 +13,8 @@ import {
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
 import { initialState, reduce, commitHash, SCHEMA_VERSION, STAGE_STALE_SECS } from './state.mjs'
-import { UI, fill } from './copy.mjs'
+import { UI, MC_UI, fill } from './copy.mjs'
+import { mcEnabled, mcSettings, saveMcSettings, generateDeck, liveQuip, closingRoast } from './mc.mjs'
 
 const $ = (sel) => document.querySelector(sel)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
@@ -91,6 +92,13 @@ async function enterGame({ gid, relays, hostPub }) {
   ctx.pub = getPublicKey(ctx.sk)
   ctx.name = ctx.local.name
   ctx.isHost = ctx.local.isHost || ctx.pub === ctx.hostPub
+  if (ctx.isHost) {
+    // restore a generated deck across refreshes — host-local only, per spec
+    try {
+      const gen = JSON.parse(localStorage.getItem(`ntg:${ctx.gid}:mcdeck`) || 'null')
+      if (gen?.rounds) { ctx.content = { ...ctx.content, deck: gen }; ctx.ui.mcDeck = true }
+    } catch { /* fall back to the static deck */ }
+  }
   ctx.net = new Net(ctx.relays)
   render()                            // connecting / join screen immediately
 
@@ -166,6 +174,44 @@ async function hostApply(act) {
   ctx.state = next
   onStateChanged()
   await publishState()
+  maybeMc(prev, next)
+}
+
+// ---- AI MC hooks (host only): fire-and-forget upgrades of prewritten
+// content. Every path already shipped a template; a generated line that
+// arrives inside its budget replaces it via the reducer, otherwise nothing.
+function maybeMc(prev, s) {
+  if (!mcEnabled()) return
+  const name = (pub) => s.players.find(p => p.pub === pub)?.name || '?'
+  const upgrade = (eventKey, slots, applyAct) =>
+    liveQuip(s, eventKey, slots).then(text => { if (text) hostApply({ ...applyAct, text, pub: ctx.pub }) })
+
+  if (s.phase === 'outcome' && (prev.phase !== 'outcome' || prev.outcomeStep !== s.outcomeStep)) {
+    const o = s.outcomes[s.outcomeStep]
+    upgrade(o.kind, {
+      a: name(o.a), b: name(o.b),
+      winner: o.winner && name(o.winner), loser: o.loser && name(o.loser),
+    }, { type: 'mc_quip', slot: 'outcome', step: s.outcomeStep })
+  } else if (s.phase === 'pairing' && prev.phase !== 'pairing') {
+    upgrade('pairing', { pairs: s.pairs.map(p => p.map(name)) },
+      { type: 'mc_quip', slot: 'quip', phase: 'pairing' })
+  } else if (s.phase === 'scoreboard' && prev.phase !== 'scoreboard') {
+    upgrade('scoreboard', { round: s.round, styleChange: s.styleChange },
+      { type: 'mc_quip', slot: 'quip', phase: 'scoreboard' })
+  } else if (s.phase === 'finale' && (prev.phase !== 'finale' ||
+             prev.finale?.turn !== s.finale.turn || prev.finale?.step !== s.finale.step)) {
+    const f = s.finale
+    const key = f.step === 'extort' ? 'extortion'
+      : f.step === 'result' ? (f.action?.kind === 'vault' ? 'vault'
+        : f.action?.kind === 'burn' ? 'burn'
+        : f.action?.paid ? 'extortion_paid'
+        : f.action?.revealed ? 'blackmail_reveal' : 'fold')
+      : null
+    if (key) upgrade(key, { actor: name(f.order[f.turn]), target: f.action?.owner && name(f.action.owner) },
+      { type: 'mc_quip', slot: 'quip', phase: 'finale' })
+  } else if (s.phase === 'final' && prev.phase !== 'final') {
+    closingRoast(s).then(cards => { if (cards) hostApply({ type: 'mc_roast', cards, pub: ctx.pub }) })
+  }
 }
 
 async function publishState() {
@@ -369,6 +415,41 @@ async function onTap(ev) {
   }
   if (act === 'host-sound')
     return send(`host:sound:${now()}`, { type: 'sound', on: !s.sound })
+  if (act === 'mc-open') { ctx.ui.mcOpen = true; return render() }
+  if (act === 'mc-close') { ctx.ui.mcOpen = false; return render() }
+  if (act === 'mc-save') {
+    saveMcSettings({
+      apiKey: $('#mc-key')?.value?.trim() || '',
+      groupContext: $('#mc-context')?.value?.trim() || '',
+      spice: Number($('#mc-spice')?.value) || 2,
+      avoid: $('#mc-avoid')?.value?.trim() || '',
+    })
+    ctx.ui.mcOpen = false
+    return render()
+  }
+  if (act === 'mc-clear') {
+    saveMcSettings({})
+    ctx.ui.mcOpen = false
+    return render()
+  }
+  if (act === 'start-night') {
+    if (mcEnabled() && !ctx.ui.mcDeck) {
+      ctx.ui.generating = true; render()
+      const m = mcSettings()
+      const deck = await generateDeck({
+        groupContext: m.groupContext, spice: m.spice, avoid: m.avoid,
+        playerNames: s.players.map(p => p.name),
+      }, ctx.content.deck)
+      ctx.ui.generating = false
+      if (deck) {
+        ctx.content = { ...ctx.content, deck }
+        ctx.ui.mcDeck = true
+        // logged locally on the host phone for post-game review — never published
+        localStorage.setItem(`ntg:${ctx.gid}:mcdeck`, JSON.stringify(deck))
+      }
+    }
+    return send(`host:start:${now()}`, { type: 'start' })
+  }
 
   // host controls — all funnel through the reducer
   if (act === 'host') return send(`host:${el.dataset.t}:${now()}`, { type: el.dataset.t })
@@ -402,7 +483,7 @@ const seated = () => [...(ctx.state?.players || [])].sort((a, b) => a.seat - b.s
 const myPair = () => ctx.state?.pairs.find(p => p.includes(ctx.pub))
 const counterpart = () => { const p = myPair(); return p ? (p[0] === ctx.pub ? p[1] : p[0]) : null }
 const amIn = () => ctx.state?.players.some(p => p.pub === ctx.pub)
-const promptText = () => ctx.content.deck.rounds
+const promptText = () => ctx.state.promptText || ctx.content.deck.rounds
   .find(r => r.round === ctx.state.round)?.prompts.find(p => p.id === ctx.state.promptId)?.text || ''
 
 // drama beat: cards keyed here render "…" for 1s the first time they appear.
@@ -439,7 +520,7 @@ function render() {
   // A state straggle mid-typing must never eat someone's secret: snapshot
   // input values/focus before the innerHTML rebuild, restore after.
   const keep = {}
-  for (const id of ['secret-input', 'name-input']) {
+  for (const id of ['secret-input', 'name-input', 'code-input', 'mc-key', 'mc-context', 'mc-avoid', 'mc-spice']) {
     const el = document.getElementById(id)
     if (el) keep[id] = {
       value: el.value, focus: document.activeElement === el,
@@ -459,7 +540,8 @@ function render() {
   }[s.phase] || (() => ''))()
   const stageChip = s?.stage && amIn()
     ? `<div class="stage-chip">${esc(fill(UI.tvCodeChip, { code: s.code }))}</div>` : ''
-  app.innerHTML = html + stageChip + (ctx.gid && s ? vSheetButton() : '') + (ctx.sheet ? vSheet() : '')
+  app.innerHTML = html + stageChip + (ctx.gid && s ? vSheetButton() : '') +
+    (ctx.sheet ? vSheet() : '') + (ctx.ui.mcOpen ? vMcModal() : '')
   for (const [id, k] of Object.entries(keep)) {
     const el = document.getElementById(id)
     if (!el) continue
@@ -534,10 +616,35 @@ function vLobby() {
     <p class="mute">${esc(fill(UI.lobbySeated, { n: String(s.players.length) }))}</p>
     ${ctx.isHost && s.players.length > 1 ? `<p class="small mute">${esc(UI.lobbySeatHint)}</p>` : ''}
     <ul class="seats">${rows || `<li class="mute">${esc(UI.lobbyWaiting)}</li>`}</ul>
-    ${ctx.isHost ? (s.players.length >= 3
-      ? btn(UI.lobbyStart, 'host', 'data-t="start"', 'btn hot big')
-      : `<p class="mute small">${esc(UI.lobbyNeedPlayers)}</p>`) : ''}
+    ${ctx.isHost ? `
+      ${btn(mcEnabled() ? UI.aiOn : UI.aiSetup, 'mc-open', '', 'btn ghost')}
+      ${ctx.ui.generating ? `<p class="quip">${esc(UI.aiGenerating)}</p>` : ''}
+      ${ctx.ui.mcDeck && !ctx.ui.generating ? `<p class="mute small">${esc(UI.aiDeckReady)}</p>` : ''}
+      ${s.players.length >= 3 && !ctx.ui.generating
+        ? btn(UI.lobbyStart, 'start-night', '', 'btn hot big')
+        : `<p class="mute small">${esc(UI.lobbyNeedPlayers)}</p>`}` : ''}
   `)
+}
+
+function vMcModal() {
+  const m = mcSettings()
+  const opt = (v, label) => `<option value="${v}" ${(m.spice || 2) === v ? 'selected' : ''}>${esc(label)}</option>`
+  return `<div class="sheet"><div class="sheet-inner">
+    <h3>${esc(MC_UI.title)}</h3>
+    <p class="small mute">${esc(MC_UI.intro)}</p>
+    <label class="small">${esc(MC_UI.keyLabel)}</label>
+    <input id="mc-key" type="password" value="${esc(m.apiKey || '')}" autocomplete="off">
+    <p class="small mute">${esc(MC_UI.keyHint)}</p>
+    <label class="small">${esc(MC_UI.contextLabel)}</label>
+    <textarea id="mc-context" rows="2" placeholder="${esc(MC_UI.contextPlaceholder)}">${esc(m.groupContext || '')}</textarea>
+    <label class="small">${esc(MC_UI.spiceLabel)}</label>
+    <select id="mc-spice">${opt(1, MC_UI.spice1)}${opt(2, MC_UI.spice2)}${opt(3, MC_UI.spice3)}</select>
+    <label class="small">${esc(MC_UI.avoidLabel)}</label>
+    <textarea id="mc-avoid" rows="2" placeholder="${esc(MC_UI.avoidPlaceholder)}">${esc(m.avoid || '')}</textarea>
+    ${btn(MC_UI.save, 'mc-save', '', 'btn hot')}
+    ${btn(MC_UI.clear, 'mc-clear', '', 'btn ghost')}
+    ${btn(MC_UI.close, 'mc-close', '', 'btn ghost')}
+  </div></div>`
 }
 
 function hostBar(...buttons) {
@@ -751,7 +858,10 @@ function vFinal() {
       <p><span class="kicker">${esc(UI.villainAward)}</span> ${esc(s.ending.villain)} ${'🗡'.repeat(s.ending.vd)}</p>
       <p><span class="kicker">${esc(UI.suckerAward)}</span> ${esc(s.ending.sucker)}</p>
     </div>
-    <p class="quip">${esc(s.quip)}</p>
+    ${s.roast ? `
+      <p class="kicker">${esc(UI.roastTitle)}</p>
+      ${s.roast.map(c => `<p class="quip">${esc(c)}</p>`).join('')}` :
+      `<p class="quip">${esc(s.quip)}</p>`}
     ${btn(UI.playAgain, 'again', '', 'btn ghost')}
   `)
 }
