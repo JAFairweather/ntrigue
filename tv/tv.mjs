@@ -76,7 +76,8 @@ async function connect({ gid, hostPub, relays, sk }) {
   setInterval(hello, STAGE_PING_SECS * 1000)
   setInterval(() => {
     const s = ctx.state
-    if (s && (s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort'))) render()
+    if (s && (s.phase === 'lobby' || s.phase === 'dilemma' ||
+        (s.phase === 'finale' && s.finale?.step === 'extort'))) render()
   }, 1000)
 }
 
@@ -178,11 +179,36 @@ function joinUrl() {
 
 function vLobby() {
   const s = ctx.state
-  const q = qrfactory(0, 'M'); q.addData(joinUrl()); q.make()
+  // rotate join info with how-to-play cards while the table fills; the
+  // roster and room code stay pinned so late arrivals always see them
+  const panels = [
+    () => {
+      const q = qrfactory(0, 'M'); q.addData(joinUrl()); q.make()
+      return `
+        <h1 class="tv-logo">${esc(UI.title)}</h1>
+        <div class="tv-qr">${q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}</div>
+        <p class="tv-mute">${esc(UI.lobbyShare)}</p>`
+    },
+    () => `
+      <p class="tv-kicker">${esc(UI.howtoTitle)}</p>
+      <p class="tv-body">${esc(UI.howtoWhat)}</p>
+      <p class="tv-quip">${esc(UI.howtoObjective)}</p>`,
+    () => `
+      <p class="tv-kicker">${esc(UI.howtoRoundHead)}</p>
+      <p class="tv-body">${esc(UI.howtoRound)}</p>
+      <p class="tv-quip">${esc(UI.howtoMatrix)}</p>`,
+    () => `
+      <p class="tv-kicker">${esc(UI.howtoFinaleHead)}</p>
+      <p class="tv-body">${esc(UI.howtoFinale)}</p>
+      <p class="tv-quip">${esc(UI.howtoTip3)}</p>`,
+    () => `
+      <p class="tv-kicker">${esc(UI.howtoStrategyHead)}</p>
+      <p class="tv-body">${esc(UI.howtoTip1)}</p>
+      <p class="tv-quip">${esc(UI.howtoTip2)} ${esc(UI.howtoTip5)}</p>`,
+  ]
+  const step = Math.floor(Date.now() / 9000) % panels.length
   return card(`
-    <h1 class="tv-logo">${esc(UI.title)}</h1>
-    <div class="tv-qr">${q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}</div>
-    <p class="tv-mute">${esc(UI.lobbyShare)}</p>
+    ${panels[step]()}
     <div class="tv-roster">${seated().map(p => `<span class="name">${esc(p.name)}</span>`).join('')}</div>
     <div class="tv-code">${esc(s.code)}</div>
   `)

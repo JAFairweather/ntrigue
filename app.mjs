@@ -563,8 +563,21 @@ const btn = (label, act, data = '', cls = 'btn') =>
 
 const vSheetButton = () => `<button class="sheet-btn" data-act="sheet">?</button>`
 const vSheet = () => `<div class="sheet"><div class="sheet-inner">
-  <h3>${esc(UI.scoringTitle)}</h3>
-  <p>${esc(UI.scoringRounds)}</p><p>${esc(UI.scoringFinale)}</p><p>${esc(UI.scoringAwards)}</p>
+  <h3>${esc(UI.howtoTitle)}</h3>
+  <p class="small">${esc(UI.howtoWhat)}</p>
+  <p class="kicker">${esc(UI.howtoObjectiveHead)}</p>
+  <p class="small">${esc(UI.howtoObjective)}</p>
+  <p class="kicker">${esc(UI.howtoRoundHead)}</p>
+  <p class="small">${esc(UI.howtoRound)}</p>
+  <p class="small">${esc(UI.howtoMatrix)}</p>
+  <p class="kicker">${esc(UI.howtoFinaleHead)}</p>
+  <p class="small">${esc(UI.howtoFinale)}</p>
+  <p class="kicker">${esc(UI.howtoStrategyHead)}</p>
+  <p class="small">· ${esc(UI.howtoTip1)}</p>
+  <p class="small">· ${esc(UI.howtoTip2)}</p>
+  <p class="small">· ${esc(UI.howtoTip3)}</p>
+  <p class="small">· ${esc(UI.howtoTip4)}</p>
+  <p class="small">· ${esc(UI.howtoTip5)}</p>
   ${btn(UI.close, 'sheet')}</div></div>`
 
 function vLanding() {
@@ -619,7 +632,12 @@ function vLobby() {
       ${s.stage ? btn(s.sound ? UI.soundOn : UI.soundOff, 'host-sound', '', 'btn ghost') : ''}
       ${ctx.ui.netWarn ? `<p class="small hot-text">${esc(UI.netCheckWarn)}</p>` : ''}
       <p class="mute small">${esc(UI.createWarning)}</p>` :
-      `<p class="mute">${esc(fill(UI.joinWaitHost, { host: nameOf(ctx.hostPub) }))}</p>`}
+      `<p class="mute">${esc(fill(UI.joinWaitHost, { host: nameOf(ctx.hostPub) }))}</p>
+      <p class="kicker">${esc(UI.briefTitle)}</p>
+      <p class="small">${esc(UI.howtoWhat)}</p>
+      <p class="small">${esc(UI.howtoMatrix)}</p>
+      <p class="small">${esc(UI.howtoFinale)}</p>
+      <p class="small mute">${esc(UI.briefMore)}</p>`}
     <p class="mute">${esc(fill(UI.lobbySeated, { n: String(s.players.length) }))}</p>
     ${ctx.isHost && s.players.length > 1 ? `<p class="small mute">${esc(UI.lobbySeatHint)}</p>` : ''}
     <ul class="seats">${rows || `<li class="mute">${esc(UI.lobbyWaiting)}</li>`}</ul>
