@@ -107,7 +107,7 @@ async function connect({ gid, hostPub, relays, sk }, resumed = false) {
   setInterval(hello, STAGE_PING_SECS * 1000)
   setInterval(() => {
     const s = ctx.state
-    if (s && (s.phase === 'lobby' || s.phase === 'dilemma' ||
+    if (s && (s.phase === 'dilemma' ||
         (s.phase === 'finale' && s.finale?.step === 'extort'))) render()
   }, 1000)
 }
@@ -212,38 +212,28 @@ function joinUrl() {
 
 function vLobby() {
   const s = ctx.state
-  // rotate join info with how-to-play cards while the table fills; the
-  // roster and room code stay pinned so late arrivals always see them
-  const panels = [
-    () => {
-      const q = qrfactory(0, 'M'); q.addData(joinUrl()); q.make()
-      return `
-        <h1 class="tv-logo">${esc(UI.title)}</h1>
-        <div class="tv-qr">${q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}</div>
-        <p class="tv-mute">${esc(UI.lobbyShare)}</p>`
-    },
-    () => `
-      <p class="tv-kicker">${esc(UI.howtoTitle)}</p>
-      <p class="tv-body">${esc(UI.howtoWhat)}</p>
-      <p class="tv-quip">${esc(UI.howtoObjective)}</p>`,
-    () => `
-      <p class="tv-kicker">${esc(UI.howtoRoundHead)}</p>
-      <p class="tv-body">${esc(UI.howtoRound)}</p>
-      <p class="tv-quip">${esc(UI.howtoMatrix)}</p>`,
-    () => `
-      <p class="tv-kicker">${esc(UI.howtoFinaleHead)}</p>
-      <p class="tv-body">${esc(UI.howtoFinale)}</p>
-      <p class="tv-quip">${esc(UI.howtoTip3)}</p>`,
-    () => `
-      <p class="tv-kicker">${esc(UI.howtoStrategyHead)}</p>
-      <p class="tv-body">${esc(UI.howtoTip1)}</p>
-      <p class="tv-quip">${esc(UI.howtoTip2)} ${esc(UI.howtoTip5)}</p>`,
-  ]
-  const step = Math.floor(Date.now() / 9000) % panels.length
+  // everything at once, static: the whole game in three tiles, join info
+  // beneath them, the roster filling in at the bottom
+  const q = qrfactory(0, 'M'); q.addData(joinUrl()); q.make()
+  const tile = (head, ...ps) => `<div class="tv-tile">
+    <p class="tv-kicker">${esc(head)}</p>
+    ${ps.map(t => `<p>${esc(t)}</p>`).join('')}
+  </div>`
   return card(`
-    ${panels[step]()}
+    <h1 class="tv-logo tv-logo-sm">${esc(UI.title)}</h1>
+    <div class="tv-tiles">
+      ${tile(UI.howtoTitle, UI.howtoWhat, UI.howtoObjective)}
+      ${tile(UI.howtoRoundHead, UI.howtoRound, UI.howtoMatrix)}
+      ${tile(UI.howtoFinaleHead, UI.howtoFinale, UI.howtoTip5)}
+    </div>
+    <div class="tv-join">
+      <div class="tv-qr">${q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}</div>
+      <div class="tv-join-col">
+        <p class="tv-mute">${esc(UI.lobbyShare)}</p>
+        <div class="tv-code">${esc(s.code)}</div>
+      </div>
+    </div>
     <div class="tv-roster">${seated().map(p => `<span class="name">${esc(p.name)}</span>`).join('')}</div>
-    <div class="tv-code">${esc(s.code)}</div>
   `)
 }
 

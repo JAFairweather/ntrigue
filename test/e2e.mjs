@@ -80,6 +80,7 @@ await tv.goto('http://localhost:8899/tv/index.html#r=' + encodeURIComponent('ws:
 await tv.locator('#tv-code').fill(code, T)
 await tv.getByRole('button', { name: 'Find the table' }).click(T)
 await see(tv, 'Marco')                               // lobby roster on the big screen
+if (process.env.SNAP) await tv.screenshot({ path: process.env.SNAP })
 await see(sarah, '📺')                               // phones flag the stage
 await tap(james, 'Start the night')
 
