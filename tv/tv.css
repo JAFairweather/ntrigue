@@ -43,6 +43,28 @@ body.tv { overflow: hidden; }
   text-indent: .4em;
   color: var(--gold);
 }
+.tv-logo-sm { font-size: 5vh; }
+
+/* lobby: the whole game in three static tiles, join info beneath */
+.tv-tiles {
+  display: flex; align-items: stretch;
+  gap: 2.5vw; width: 100%; max-width: 92vw;
+}
+.tv-tile {
+  flex: 1 1 0;
+  border: .3vh solid var(--edge); border-radius: 2.5vh;
+  padding: 2.8vh 1.8vw;
+  display: flex; flex-direction: column; gap: 1.8vh;
+  text-align: left;
+}
+.tv-tile .tv-kicker { font-size: 2.4vh; }
+.tv-tile p:not(.tv-kicker) { font-size: 2.9vh; line-height: 1.4; }
+
+.tv-join { display: flex; align-items: center; gap: 3.5vw; }
+.tv-join .tv-qr { width: 18vh; padding: 1.2vh; }
+.tv-join-col { display: flex; flex-direction: column; align-items: center; gap: 1.5vh; }
+.tv-join .tv-code { font-size: 7vh; padding: 1.2vh 3vh; }
+.tv-tiles + .tv-join + .tv-roster .name { font-size: 4.6vh; padding: .8vh 2.4vh; }
 
 .tv-code {
   font-size: 12vh;
