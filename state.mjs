@@ -21,6 +21,16 @@ export const ROUNDS = 4
 export const PAYOFF = { trade: 3, betrayWin: 5, betrayLose: 1, hold: 1 }
 export const FINALE = { extortPrice: 3, revealBonus: 2, burnBonus: 1, vaultBonus: 2 }
 
+// Deck flavors: the host picks the night's heat in the lobby. 'mild' is the
+// default — the very-playable first game. Generated (AI) and legacy decks
+// carry a top-level rounds array and bypass flavors entirely.
+export const FLAVORS = ['mild', 'spicy', 'scorching']
+export function flavorRounds(content, flavor) {
+  if (content.deck.rounds) return content.deck.rounds
+  const fl = content.deck.flavors
+  return (fl.find(f => f.id === flavor) || fl[0]).rounds
+}
+
 // Stage (TV) client: heartbeat cadence and how stale a stage may go before
 // the host declares it gone and phones re-expand.
 export const STAGE_PING_SECS = 20
@@ -50,6 +60,7 @@ export function initialState({ gid, host, relays }) {
     phaseAt: 0,                 // set by host on each publish (unix seconds)
     round: 0,
     practice: false,            // true during the warm-up round (round 0)
+    flavor: 'mild',             // deck heat, picked by the host at start
     players: [],                // [{pub, name, seat}] — seat assigned at start
     promptId: null,
     promptText: null,           // the drawn prompt's text — carries generated
@@ -208,9 +219,10 @@ function evalStyles(state, content) {
 function drawPrompt(state, content) {
   // round 0 draws from the mild warm-up pool (fall back to round 1's pool
   // for decks without one, e.g. generated decks)
+  const rounds = flavorRounds(content, state.flavor)
   const source = state.round === 0
-    ? (content.deck.practice || content.deck.rounds.find(r => r.round === 1).prompts)
-    : content.deck.rounds.find(r => r.round === state.round).prompts
+    ? (content.deck.practice || rounds.find(r => r.round === 1).prompts)
+    : rounds.find(r => r.round === state.round).prompts
   const pool = source.filter(p => !state.usedPrompts.includes(p.id))
   const chosen = pool[seed32(`draw:${state.gid}:${state.draws}`) % pool.length]
   state.draws++
@@ -355,6 +367,7 @@ export function reduce(prev, act, content) {
     }
     case 'start':
       if (state.phase !== 'lobby' || state.players.length < 3) return prev
+      state.flavor = FLAVORS.includes(act.flavor) ? act.flavor : 'mild'
       if (act.practice) { state.practice = true; startRound(state, content, 0) }
       else startRound(state, content, 1)
       return state
