@@ -33,6 +33,7 @@ export const UI = {
   promptPlaceholder: 'Type your secret…',
   promptLock: 'Lock it in',
   promptLocked: 'Locked. Phones down.',
+  delivering: 'Reaching the table… keep this screen open.',
   phonesDown: 'Phones down when done.',
   waitingOn: 'Waiting on {names}…',
   hostEveryoneIn: 'Everyone’s in →',

@@ -105,10 +105,22 @@ async function connect({ gid, hostPub, relays, sk }, resumed = false) {
     { type: ctx.announced ? 'stage_ping' : 'stage_join' }).then(() => { ctx.announced = true }).catch(() => {})
   hello()
   setInterval(hello, STAGE_PING_SECS * 1000)
-  setInterval(() => {
+  // poll fallback: if the live feed's socket dies, keep pulling the latest
+  let tickN = 0, polling = false
+  setInterval(async () => {
+    tickN++
     const s = ctx.state
     if (s && (s.phase === 'dilemma' ||
         (s.phase === 'finale' && s.finale?.step === 'extort'))) render()
+    if (tickN % 10 === 0 && !polling) {
+      polling = true
+      try {
+        const [latest] = await ctx.net.query({
+          kinds: [KIND_APP], authors: [hostPub], '#d': [dState(gid)],
+        }).catch(() => [])
+        if (latest) applyState(latest)
+      } finally { polling = false }
+    }
   }, 1000)
 }
 

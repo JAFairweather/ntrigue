@@ -126,7 +126,15 @@ async function enterGame({ gid, relays, hostPub }) {
   }
   refreshCollected()
   render()
-  setInterval(tick, 1000)             // soft timers + stage watchdog
+  setInterval(tick, 1000)             // soft timers + retries + stage watchdog
+  // returning to the foreground: sockets may be dead — fetch and flush now
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return
+    pollNet().catch(console.error)
+    deliverAnswer().catch(console.error)
+    autoEffects().catch(console.error)
+    refreshCollected()
+  })
 }
 
 // ---------------------------------------------------------------- host driver
@@ -152,10 +160,17 @@ async function hostCatchUp() {
     if (e.pubkey === ctx.pub) continue
     const act = parseAction(ctx.gid, e)
     if (!act) continue
-    const next = reduce(ctx.state, act, ctx.content)
-    if (next !== ctx.state) { ctx.state = next; changed = true }
+    const prev = ctx.state
+    const next = reduce(prev, act, ctx.content)
+    if (next === prev) continue
+    if (next.phase !== prev.phase || next.outcomeStep !== prev.outcomeStep ||
+        next.finale?.turn !== prev.finale?.turn || next.finale?.step !== prev.finale?.step)
+      next.phaseAt = now()
+    ctx.state = next
+    changed = true
   }
   if (changed) await publishState()
+  return changed
 }
 
 function hostIngest(event) {
@@ -248,12 +263,66 @@ async function send(dSuffix, payload) {
 
 function onStateChanged() {
   autoEffects().catch(console.error)
+  deliverAnswer().catch(console.error)
   render()
 }
 
+// Push my locked answers to the table. Two independent debts, both retried
+// until confirmed: the sealed copy of each secret (any round — a refusal
+// must never stall the night), and the done flag for the current prompt.
+// Idempotent and re-entrant-safe — called from the tap, from every state
+// change, on returning to the foreground, and from the retry timer.
+let deliveringAnswer = false
+async function deliverAnswer() {
+  if (deliveringAnswer || !ctx.state) return
+  deliveringAnswer = true
+  try {
+    for (const [round, scope] of Object.entries(ctx.local.scopes)) {
+      if (scope.published) continue
+      try {
+        await publishScope(ctx.net, ctx.sk, {
+          scopeId: scope.scopeId, generation: 1, scopeKey: unb64(scope.key),
+          payload: { text: scope.text, round: Number(round), prompt: scope.prompt },
+        })
+        scope.published = true
+        saveLocal()
+      } catch (e) { console.error('sealed copy not accepted yet — will retry', e) }
+    }
+    const s = ctx.state
+    const mine = s.phase === 'prompt' ? ctx.local.scopes[s.round] : null
+    if (mine && mine.prompt === s.promptId && !s.answered[ctx.pub])
+      await send(`ans:${s.round}:${ctx.pub}`, { type: 'answered', round: s.round })
+  } finally { deliveringAnswer = false }
+}
+
+// Poll fallback: live subscriptions die when a phone sleeps (mobile browsers
+// kill background sockets and don't always resubscribe). Every few seconds,
+// and on every return to the foreground, fetch what push should have brought.
+let polling = false
+async function pollNet() {
+  if (polling || !ctx.net || !ctx.gid) return
+  polling = true
+  try {
+    if (ctx.isHost) {
+      if (await hostCatchUp()) onStateChanged()
+    } else {
+      const [remote] = await ctx.net.query({
+        kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)],
+      }).catch(() => [])
+      if (remote) applyStateEvent(remote)
+      refreshCollected()
+    }
+  } finally { polling = false }
+}
+
+let autoBusy = false
 async function autoEffects() {
   const s = ctx.state
-  if (!s) return
+  if (autoBusy || !s) return
+  autoBusy = true
+  try { await autoEffectsInner(s) } finally { autoBusy = false }
+}
+async function autoEffectsInner(s) {
   const me = ctx.pub
 
   // remember my counterpart for each round (window closes when pairs rotate)
@@ -285,7 +354,10 @@ async function autoEffects() {
     const resolvedPast = s.round > r || (s.round === r && ['outcome', 'scoreboard', 'finale_intro', 'finale', 'final'].includes(s.phase))
     const scope = ctx.local.scopes[r]
     const other = ctx.local.pairsByRound[r]
-    if (pend.choice === 'SHARE' && resolvedPast && scope && other && !ctx.local.granted[r]) {
+    // wait for the sealed copy to be accepted before handing over its key —
+    // a pointer to nothing would show the counterpart an endless "Opening…"
+    if (pend.choice === 'SHARE' && resolvedPast && scope && scope.published !== false &&
+        other && !ctx.local.granted[r]) {
       await grant(ctx.net, ctx.sk, other, {
         scopeId: scope.scopeId, generation: 1, scopeKey: unb64(scope.key),
         scopeName: `r${r}`, relayHint: ctx.relays[0],
@@ -351,18 +423,18 @@ async function onTap(ev) {
     return send('order', { type: 'order', order })
   }
   if (act === 'lock-secret') {
+    // Store first, respond instantly, deliver in the background with retries.
+    // The tap must never depend on the network — a slow or refusing relay
+    // used to kill this handler silently and the button looked dead.
     const text = $('#secret-input')?.value?.trim()
     if (!text) return
-    const scopeId = bytesToHex(crypto.getRandomValues(new Uint8Array(8)))
-    const scopeKey = newScopeKey()
-    await publishScope(ctx.net, ctx.sk, {
-      scopeId, generation: 1, scopeKey,
-      payload: { text, round: s.round, prompt: s.promptId },
-    })
-    ctx.local.scopes[s.round] = { scopeId, key: b64(scopeKey), text }
+    ctx.local.scopes[s.round] = {
+      scopeId: bytesToHex(crypto.getRandomValues(new Uint8Array(8))),
+      key: b64(newScopeKey()), text, prompt: s.promptId, published: false,
+    }
     saveLocal()
-    await send(`ans:${s.round}:${ctx.pub}`, { type: 'answered', round: s.round })
-    return render()
+    render()
+    return deliverAnswer().catch(console.error)
   }
   if (act === 'choose') {
     const choice = el.dataset.choice
@@ -505,7 +577,17 @@ function beat(key) {
   return false
 }
 
+let tickN = 0
 function tick() {
+  tickN++
+  // retry loop: anything owed to the table that hasn't been confirmed yet
+  // (locked answer, commit, reveal, trade delivery) gets another attempt
+  if (tickN % 4 === 0) {
+    deliverAnswer().catch(console.error)
+    autoEffects().catch(console.error)
+  }
+  // pull what push should have brought — survives dead sockets after sleep
+  if (tickN % 8 === 0) pollNet().catch(console.error)
   const s = ctx.state
   if (!s) return
   if (s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort'))
@@ -698,13 +780,16 @@ function hostBar(...buttons) {
 function vPrompt() {
   const s = ctx.state
   const missing = seated().filter(p => !s.answered[p.pub]).map(p => p.name)
-  const done = s.answered[ctx.pub]
+  const mine = ctx.local.scopes[s.round]
+  const done = s.answered[ctx.pub] || (mine && mine.prompt === s.promptId)
   return vCard(`
     <p class="kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))} · ${esc(ctx.content.deck.rounds[s.round - 1].name)}</p>
     <h2 class="prompt">${esc(promptText())}</h2>
     ${done ? `
       <p class="locked">🔒 ${esc(UI.promptLocked)}</p>
-      <p class="mute">${esc(fill(UI.waitingOn, { names: missing.join(', ') || '…' }))}</p>` : `
+      ${s.answered[ctx.pub]
+        ? `<p class="mute">${esc(fill(UI.waitingOn, { names: missing.join(', ') || '…' }))}</p>`
+        : `<p class="mute small">${esc(UI.delivering)}</p>`}` : `
       <p class="mute small">${esc(UI.promptYours)}</p>
       <textarea id="secret-input" rows="3" placeholder="${esc(UI.promptPlaceholder)}"></textarea>
       ${btn(UI.promptLock, 'lock-secret', '', 'btn hot big')}
