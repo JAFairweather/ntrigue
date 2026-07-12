@@ -1,68 +1,202 @@
 {
   "version": 1,
+  "practice": [
+    {
+      "id": 901,
+      "text": "What's your guilty-pleasure song, show, or snack?"
+    },
+    {
+      "id": 902,
+      "text": "What's a small lie you've told to get out of plans?"
+    },
+    {
+      "id": 903,
+      "text": "What's something in your kitchen you can't quite justify owning?"
+    }
+  ],
   "rounds": [
     {
       "round": 1,
       "name": "Warm-up confessions",
       "prompts": [
-        { "id": 1, "text": "What's a purchase you hid or seriously downplayed to someone in this room?" },
-        { "id": 2, "text": "What's something in your home you pretend to like because it was a gift?" },
-        { "id": 3, "text": "What food do you only eat when no one's watching — and how?" },
-        { "id": 4, "text": "What's a skill you claim to have that you've been quietly faking for years?" },
-        { "id": 5, "text": "What app on your phone would you least like this table to open right now?" },
-        { "id": 6, "text": "What's the pettiest thing you've ever done to win an argument?" },
-        { "id": 7, "text": "What chore do you deliberately do badly so you'll stop being asked?" },
-        { "id": 8, "text": "What's a compliment you gave recently that you did not mean?" },
-        { "id": 9, "text": "What have you Googled this month that would require an explanation?" },
-        { "id": 10, "text": "What's the longest you've worn an item of clothing without washing it?" }
+        {
+          "id": 1,
+          "text": "What's a purchase you hid or seriously downplayed to someone in this room?"
+        },
+        {
+          "id": 2,
+          "text": "What's something in your home you pretend to like because it was a gift?"
+        },
+        {
+          "id": 3,
+          "text": "What food do you only eat when no one's watching — and how?"
+        },
+        {
+          "id": 4,
+          "text": "What's a skill you claim to have that you've been quietly faking for years?"
+        },
+        {
+          "id": 5,
+          "text": "What app on your phone would you least like this table to open right now?"
+        },
+        {
+          "id": 6,
+          "text": "What's the pettiest thing you've ever done to win an argument?"
+        },
+        {
+          "id": 7,
+          "text": "What chore do you deliberately do badly so you'll stop being asked?"
+        },
+        {
+          "id": 8,
+          "text": "What's a compliment you gave recently that you did not mean?"
+        },
+        {
+          "id": 9,
+          "text": "What have you Googled this month that would require an explanation?"
+        },
+        {
+          "id": 10,
+          "text": "What's the longest you've worn an item of clothing without washing it?"
+        }
       ]
     },
     {
       "round": 2,
       "name": "Partners",
       "prompts": [
-        { "id": 11, "text": "What's one thing your partner does that you've pretended not to notice for years?" },
-        { "id": 12, "text": "What did you *really* think at the end of your first date with your partner?" },
-        { "id": 13, "text": "What gift from your partner did you secretly return, regift, or bury in a closet?" },
-        { "id": 14, "text": "Which of your partner's stories could you recite word-for-word, including the pauses?" },
-        { "id": 15, "text": "What have you blamed on traffic, the dog, or the kids that was actually you?" },
-        { "id": 16, "text": "What do you do differently the moment your partner leaves town?" },
-        { "id": 17, "text": "What did your family honestly say about your partner after first meeting them?" },
-        { "id": 18, "text": "What hill does your partner die on that you find completely ridiculous?" },
-        { "id": 19, "text": "When did you last pretend to be asleep, and what were you avoiding?" },
-        { "id": 20, "text": "What \"joint decision\" in your house was actually decided before the conversation started?" }
+        {
+          "id": 11,
+          "text": "What's one thing your partner does that you've pretended not to notice for years?"
+        },
+        {
+          "id": 12,
+          "text": "What did you *really* think at the end of your first date with your partner?"
+        },
+        {
+          "id": 13,
+          "text": "What gift from your partner did you secretly return, regift, or bury in a closet?"
+        },
+        {
+          "id": 14,
+          "text": "Which of your partner's stories could you recite word-for-word, including the pauses?"
+        },
+        {
+          "id": 15,
+          "text": "What have you blamed on traffic, the dog, or the kids that was actually you?"
+        },
+        {
+          "id": 16,
+          "text": "What do you do differently the moment your partner leaves town?"
+        },
+        {
+          "id": 17,
+          "text": "What did your family honestly say about your partner after first meeting them?"
+        },
+        {
+          "id": 18,
+          "text": "What hill does your partner die on that you find completely ridiculous?"
+        },
+        {
+          "id": 19,
+          "text": "When did you last pretend to be asleep, and what were you avoiding?"
+        },
+        {
+          "id": 20,
+          "text": "What \"joint decision\" in your house was actually decided before the conversation started?"
+        }
       ]
     },
     {
       "round": 3,
       "name": "The room",
       "prompts": [
-        { "id": 21, "text": "What was your honest first impression of the person seated to your left?" },
-        { "id": 22, "text": "Who at this table would survive longest in an apocalypse — and who's gone in the first week?" },
-        { "id": 23, "text": "Who here is most likely to be living a secret second life, and what is it?" },
-        { "id": 24, "text": "Which couple at this table trash-talks the other couple more over text?" },
-        { "id": 25, "text": "Who here is the worst driver? Cite your evidence." },
-        { "id": 26, "text": "What does someone at this table do that you find secretly hilarious?" },
-        { "id": 27, "text": "Who here would you call to help you bury a problem — and who must never know?" },
-        { "id": 28, "text": "If you swapped lives with someone here for a week, whose — and what's the first thing you'd fix?" },
-        { "id": 29, "text": "Who at this table is most likely to end up briefly famous, and for what?" },
-        { "id": 30, "text": "What's a fashion choice by someone here that you have heroically never commented on?" }
+        {
+          "id": 21,
+          "text": "What was your honest first impression of the person seated to your left?"
+        },
+        {
+          "id": 22,
+          "text": "Who at this table would survive longest in an apocalypse — and who's gone in the first week?"
+        },
+        {
+          "id": 23,
+          "text": "Who here is most likely to be living a secret second life, and what is it?"
+        },
+        {
+          "id": 24,
+          "text": "Which couple at this table trash-talks the other couple more over text?"
+        },
+        {
+          "id": 25,
+          "text": "Who here is the worst driver? Cite your evidence."
+        },
+        {
+          "id": 26,
+          "text": "What does someone at this table do that you find secretly hilarious?"
+        },
+        {
+          "id": 27,
+          "text": "Who here would you call to help you bury a problem — and who must never know?"
+        },
+        {
+          "id": 28,
+          "text": "If you swapped lives with someone here for a week, whose — and what's the first thing you'd fix?"
+        },
+        {
+          "id": 29,
+          "text": "Who at this table is most likely to end up briefly famous, and for what?"
+        },
+        {
+          "id": 30,
+          "text": "What's a fashion choice by someone here that you have heroically never commented on?"
+        }
       ]
     },
     {
       "round": 4,
       "name": "High stakes",
       "prompts": [
-        { "id": 31, "text": "What's the most elaborate lie you've told to get out of plans — possibly with people at this table?" },
-        { "id": 32, "text": "What's something you've never told anyone at this table?" },
-        { "id": 33, "text": "What's the most money you've spent that nobody in your life knows about?" },
-        { "id": 34, "text": "What text did you once send to the wrong person, and what did it say?" },
-        { "id": 35, "text": "Which ex would you be most nervous to bump into tonight, and why?" },
-        { "id": 36, "text": "What's the closest you've ever come to being fired?" },
-        { "id": 37, "text": "What rule do you break regularly with zero guilt?" },
-        { "id": 38, "text": "What's your most embarrassing recurring thought?" },
-        { "id": 39, "text": "What's the strangest thing you do when you're home completely alone?" },
-        { "id": 40, "text": "If your worst 24 hours became a documentary, what's its title?" }
+        {
+          "id": 31,
+          "text": "What's the most elaborate lie you've told to get out of plans — possibly with people at this table?"
+        },
+        {
+          "id": 32,
+          "text": "What's something you've never told anyone at this table?"
+        },
+        {
+          "id": 33,
+          "text": "What's the most money you've spent that nobody in your life knows about?"
+        },
+        {
+          "id": 34,
+          "text": "What text did you once send to the wrong person, and what did it say?"
+        },
+        {
+          "id": 35,
+          "text": "Which ex would you be most nervous to bump into tonight, and why?"
+        },
+        {
+          "id": 36,
+          "text": "What's the closest you've ever come to being fired?"
+        },
+        {
+          "id": 37,
+          "text": "What rule do you break regularly with zero guilt?"
+        },
+        {
+          "id": 38,
+          "text": "What's your most embarrassing recurring thought?"
+        },
+        {
+          "id": 39,
+          "text": "What's the strangest thing you do when you're home completely alone?"
+        },
+        {
+          "id": 40,
+          "text": "If your worst 24 hours became a documentary, what's its title?"
+        }
       ]
     }
   ]

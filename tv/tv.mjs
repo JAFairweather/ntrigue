@@ -98,15 +98,18 @@ async function connect({ gid, hostPub, relays, sk }, resumed = false) {
     if (!remote || phase === 'final' || ageHrs > 12) return leave()
   }
   if (remote) applyState(remote)
-  ctx.net.subscribe([{ kinds: [KIND_APP], authors: [hostPub], '#d': [dState(gid)] }], applyState)
+  const resub = () => ctx.net.subscribe([{ kinds: [KIND_APP], authors: [hostPub], '#d': [dState(gid)] }], applyState)
+  resub()
 
   // announce + heartbeat, so phones adapt and the host can detect a yank
   const hello = () => sendAction(ctx.net, ctx.sk, gid, `stg:${ctx.pub}`,
     { type: ctx.announced ? 'stage_ping' : 'stage_join' }).then(() => { ctx.announced = true }).catch(() => {})
   hello()
   setInterval(hello, STAGE_PING_SECS * 1000)
-  // poll fallback: if the live feed's socket dies, keep pulling the latest
-  let tickN = 0, polling = false
+  // poll fallback: if the live feed's socket dies, keep pulling the latest —
+  // and after three straight misses, rebuild the whole pool (zombie sockets
+  // look open but deliver nothing; nobody should have to reload a TV)
+  let tickN = 0, polling = false, misses = 0
   setInterval(async () => {
     tickN++
     const s = ctx.state
@@ -118,7 +121,14 @@ async function connect({ gid, hostPub, relays, sk }, resumed = false) {
         const [latest] = await ctx.net.query({
           kinds: [KIND_APP], authors: [hostPub], '#d': [dState(gid)],
         }).catch(() => [])
-        if (latest) applyState(latest)
+        if (latest) { misses = 0; applyState(latest) }
+        else if (ctx.state && ++misses >= 3) {
+          misses = 0
+          try { ctx.net.close() } catch { /* gone */ }
+          ctx.net = new Net(ctx.relays)
+          resub()
+          hello()
+        }
       } finally { polling = false }
     }
   }, 1000)
@@ -197,7 +207,7 @@ function render() {
   else if (!s) html = card(`<h1 class="tv-logo">${esc(UI.title)}</h1><p class="tv-mute">${esc(UI.tvConnected)}</p>`)
   else html = ({
     lobby: vLobby, prompt: vPrompt, pairing: vPairing, dilemma: vDilemma,
-    outcome: vOutcome, scoreboard: vScoreboard, finale_intro: vFinaleIntro,
+    outcome: vOutcome, debrief: vDebrief, scoreboard: vScoreboard, finale_intro: vFinaleIntro,
     finale: vFinale, final: vFinal,
   }[s.phase] || (() => ''))()
   // always a way off a table — quiet corner button on every connected screen
@@ -256,20 +266,36 @@ function vLobby() {
   `)
 }
 
+const tvRoundKicker = () => {
+  const s = ctx.state
+  if (s.round === 0) return esc(UI.practiceLabel)
+  const name = ctx.deck.rounds[s.round - 1]?.name
+  return `${esc(fill(UI.roundLabel, { n: String(s.round) }))}${name ? ` · ${esc(name)}` : ''}`
+}
+
 function vPrompt() {
   const s = ctx.state
   const missing = seated().filter(p => !s.answered[p.pub]).length
   return card(`
-    <p class="tv-kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))} · ${esc(ctx.deck.rounds[s.round - 1].name)}</p>
+    <p class="tv-kicker">${tvRoundKicker()}</p>
     <h1 class="tv-huge">${esc(promptText())}</h1>
     <p class="tv-mute">${missing ? esc(fill(UI.tvWriting, { n: String(missing) })) : esc(UI.tvAllIn)}</p>
+  `)
+}
+
+function vDebrief() {
+  return card(`
+    <p class="tv-kicker">${esc(UI.practiceLabel)}</p>
+    <h1 class="tv-huge">${esc(UI.debriefTitle)}</h1>
+    <p class="tv-body">${esc(UI.debriefBody)}</p>
+    <p class="tv-quip">${esc(UI.debriefReset)}</p>
   `)
 }
 
 function vPairing() {
   const s = ctx.state
   return card(`
-    <p class="tv-kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))}</p>
+    <p class="tv-kicker">${tvRoundKicker()}</p>
     ${s.pairs.map(([a, b]) =>
       `<div class="tv-names">${esc(nameOf(a).toUpperCase())}<span class="vs">⇄</span>${esc(nameOf(b).toUpperCase())}</div>`).join('')}
     <p class="tv-quip">${esc(s.quip)}</p>
@@ -281,7 +307,7 @@ function vDilemma() {
   const left = timerLeft(15)
   const locked = s.pairs.flat().filter(p => s.commits[p]).length
   return card(`
-    <p class="tv-kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))}</p>
+    <p class="tv-kicker">${tvRoundKicker()}</p>
     ${s.pairs.map(([a, b]) =>
       `<div class="tv-names">${esc(nameOf(a).toUpperCase())}<span class="vs">⇄</span>${esc(nameOf(b).toUpperCase())}</div>`).join('')}
     <div class="tv-timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>

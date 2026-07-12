@@ -43,6 +43,15 @@ opening the landing page with `#r=<url,url>` before tapping New Game).
 - All timers are soft; every phase tolerates relay straggle with
   "waiting on …" states. Refresh/crash rejoins at the current phase from
   localStorage + the latest state event.
+- **Warm-up round** (host toggle in the lobby, on by default): round 0 runs
+  the full answer→match→choose→outcome loop on a mild prompt pool with
+  coaching lines on every screen, ends in a debrief, and wipes scores,
+  daggers, counters, and collected secrets before round 1.
+- **Self-healing transport**: taps never wait on the network (store first,
+  retry until the state confirms), every client polls for what push should
+  have delivered, and three consecutive misses of the always-present state
+  event tear down and rebuild the socket pool — phones sleeping, zombie
+  connections, and dozing hosts all recover without a manual reload.
 - `vendor/nostr-tools.js` is a prebuilt ESM bundle of nostr-tools 2.x
   (+ noble sha256 + qrcode-generator) so the app stays CDN-free and
   build-free.

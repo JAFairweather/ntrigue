@@ -82,7 +82,28 @@ await tv.getByRole('button', { name: 'Find the table' }).click(T)
 await see(tv, 'Marco')                               // lobby roster on the big screen
 if (process.env.SNAP) await tv.screenshot({ path: process.env.SNAP })
 await see(sarah, '📺')                               // phones flag the stage
+await see(james, 'Warm-up round: on')                // practice defaults on
 await tap(james, 'Start the night')
+
+// ---- warm-up round (round 0): full loop with coaching, wiped at the debrief
+for (const name of NAMES) {
+  const page = pages[name]
+  await see(page, 'Warm-up — nothing counts')
+  await page.locator('#secret-input').fill(`${name} warmup`, T)
+  await tap(page, 'Lock it in')
+}
+await see(james, 'matchups')
+await see(james, 'Your match this round: Priya')     // the explicit who-am-I-against line
+await tap(james, 'Next')
+for (const name of NAMES) {
+  await see(pages[name], 'Both share: +3 each')      // payoff cheat right on the choice screen
+  await tap(pages[name], 'SHARE')
+}
+await see(james, 'traded')
+await tap(james, 'Next')                             // outcome pair 2
+await tap(james, 'Next')                             // → debrief, not a scoreboard
+for (const page of [...all, tv]) await see(page, 'That was the warm-up')
+await tap(james, 'Next')                             // wipe + round 1
 
 // ---- four rounds; R3 has a betrayal (Marco holds on James), rest trade
 for (let r = 1; r <= 4; r++) {
@@ -206,6 +227,7 @@ await browser.close()
 relay.close()
 server.close()
 console.log('e2e ok — 4 phones + TV stage, full night: code join on the big screen,')
+console.log('        warm-up round with coaching + debrief wipe (exact scores prove it),')
 console.log('        4 rounds (trades + a betrayal, private reads), style labels on')
 console.log('        stage standings, finale extort/refuse/reveal + vaults + burn,')
 console.log('        exact scores, refresh-rejoin, stage walk-away + code-in-address')
