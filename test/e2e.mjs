@@ -83,6 +83,8 @@ await see(tv, 'Marco')                               // lobby roster on the big 
 if (process.env.SNAP) await tv.screenshot({ path: process.env.SNAP })
 await see(sarah, '📺')                               // phones flag the stage
 await see(james, 'Warm-up round: on')                // practice defaults on
+await see(james, 'Tonight’s menu')                   // flavor picker, innocent default
+await tap(james, 'Spicy')                            // pick the classic deck tonight
 await tap(james, 'Start the night')
 
 // ---- warm-up round (round 0): full loop with coaching, wiped at the debrief

@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import { generateSecretKey, getPublicKey, bytesToHex } from '../vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from '../nipxx.mjs'
-import { initialState, reduce, commitHash, pairingsFor, roomCode, ARCHETYPES } from '../state.mjs'
+import { initialState, reduce, commitHash, pairingsFor, roomCode, ARCHETYPES, flavorRounds, FLAVORS } from '../state.mjs'
 import { buildDeckInput, buildPublicLog, buildQuipInput, buildRoastInput, toDeckShape, extractJson } from '../mc.mjs'
 import { Relay } from './relay.mjs'
 
@@ -96,12 +96,23 @@ apply({ type: 'start', pub: sarah.pub }, false)                      // only hos
   assert.deepEqual(s.daggers, {})
   assert.deepEqual(s.collected, {}, 'warm-up secrets are not finale ammunition')
   assert.deepEqual(s.counters, {}, 'style counters reset too')
-  assert.ok(content.deck.rounds.find(r => r.round === 1).prompts.some(p => p.id === s.promptId))
+  assert.ok(flavorRounds(content, 'mild').find(r => r.round === 1).prompts.some(p => p.id === s.promptId))
 }
+
+// ---- flavor picker: each heat draws from its own pool; bad values fall
+// back to mild; the default (no flavor in the act) is mild
+for (const fl of FLAVORS) {
+  const s = reduce(state, { type: 'start', pub: james.pub, flavor: fl }, content)
+  assert.equal(s.flavor, fl)
+  assert.ok(flavorRounds(content, fl).find(r => r.round === 1).prompts.some(p => p.id === s.promptId),
+    `flavor ${fl} draws from its own round-1 pool`)
+}
+assert.equal(reduce(state, { type: 'start', pub: james.pub, flavor: 'nuclear' }, content).flavor, 'mild')
 
 host('start')
 assert.equal(state.phase, 'prompt')
 assert.equal(state.round, 1)
+assert.equal(state.flavor, 'mild')                                   // the very-playable default
 
 // pairing schedule sanity for 4 players
 assert.deepEqual(pairingsFor(state.players, 1), [[james.pub, priya.pub], [sarah.pub, marco.pub]])
@@ -130,10 +141,10 @@ const script = {
 const redrawRound = 2                                                 // exercise redraw once
 for (let r = 1; r <= 4; r++) {
   assert.equal(state.phase, 'prompt')
-  const pool = content.deck.rounds[r - 1].prompts.map(p => p.id)
+  const pool = flavorRounds(content, state.flavor)[r - 1].prompts.map(p => p.id)
   assert.ok(pool.includes(state.promptId), 'prompt drawn from round pool')
   assert.equal(state.promptText,
-    content.deck.rounds[r - 1].prompts.find(p => p.id === state.promptId).text,
+    flavorRounds(content, state.flavor)[r - 1].prompts.find(p => p.id === state.promptId).text,
     'drawn prompt text travels in public state (MC deck indirection)')
   if (r === redrawRound) {
     const before = state.promptId
@@ -333,11 +344,12 @@ const gen = {
     { round: 2, candidates: [{ text: 'Only one?', policy_ok: true, reason: 'ok' }] },
   ],
 }
-const shaped = toDeckShape(gen, content.deck)
+const staticSpicy = { rounds: flavorRounds(content, 'spicy') }
+const shaped = toDeckShape(gen, staticSpicy)
 assert.deepEqual(shaped.rounds[0].prompts.map(p => p.text), ['Gen A?', 'Gen B?'])
 assert.equal(shaped.rounds[0].prompts[0].id, 100)                    // stable ids
-assert.equal(shaped.rounds[1], content.deck.rounds[1])               // <2 ok → static
-assert.equal(shaped.rounds[2], content.deck.rounds[2])               // missing → static
+assert.equal(shaped.rounds[1], staticSpicy.rounds[1])                // <2 ok → static
+assert.equal(shaped.rounds[2], staticSpicy.rounds[2])                // missing → static
 
 // ---- lenient JSON extraction (the keyless public backend is chatty)
 assert.deepEqual(extractJson('Sure! Here you go:\n{"text":"A line.","policy_ok":true,"reason":"ok"}\nEnjoy!'),

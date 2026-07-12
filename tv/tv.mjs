@@ -6,7 +6,7 @@
 
 import { generateSecretKey, getPublicKey, bytesToHex, hexToBytes, qrfactory } from '../vendor/nostr-tools.js'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, findGameByCode } from '../net.mjs'
-import { SCHEMA_VERSION, STAGE_PING_SECS } from '../state.mjs'
+import { SCHEMA_VERSION, STAGE_PING_SECS, flavorRounds } from '../state.mjs'
 import { UI, fill } from '../copy.mjs'
 
 const $ = (sel) => document.querySelector(sel)
@@ -186,7 +186,7 @@ function stingers(prev, s) {
 
 const nameOf = (pub) => ctx.state?.players.find(p => p.pub === pub)?.name || '?'
 const seated = () => [...(ctx.state?.players || [])].sort((a, b) => a.seat - b.seat)
-const promptText = () => ctx.state.promptText || ctx.deck.rounds
+const promptText = () => ctx.state.promptText || flavorRounds({ deck: ctx.deck }, ctx.state.flavor)
   .find(r => r.round === ctx.state.round)?.prompts.find(p => p.id === ctx.state.promptId)?.text || ''
 const timerLeft = (total) => Math.max(0, total - (Math.floor(Date.now() / 1000) - (ctx.state.phaseAt || 0)))
 
@@ -269,7 +269,7 @@ function vLobby() {
 const tvRoundKicker = () => {
   const s = ctx.state
   if (s.round === 0) return esc(UI.practiceLabel)
-  const name = ctx.deck.rounds[s.round - 1]?.name
+  const name = flavorRounds({ deck: ctx.deck }, s.flavor).find(r => r.round === s.round)?.name
   return `${esc(fill(UI.roundLabel, { n: String(s.round) }))}${name ? ` · ${esc(name)}` : ''}`
 }
 

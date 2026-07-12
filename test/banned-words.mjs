@@ -25,9 +25,12 @@ const check = (where, text) => {
 const { UI } = await import('../copy.mjs')
 for (const [k, v] of Object.entries(UI)) check(`copy.mjs UI.${k}`, v)
 
-// 2. every prompt in the deck — warm-up pool included
+// 2. every prompt in the deck — warm-up pool and all three flavors
 const deck = JSON.parse(await readFile(new URL('../deck.json', import.meta.url)))
-const allPrompts = [...(deck.practice || []), ...deck.rounds.flatMap(r => r.prompts)]
+const allPrompts = [
+  ...(deck.practice || []),
+  ...(deck.flavors || [{ rounds: deck.rounds }]).flatMap(f => f.rounds.flatMap(r => r.prompts)),
+]
 for (const p of allPrompts) check(`deck #${p.id}`, p.text)
 
 // 3. every quip variant

@@ -12,7 +12,7 @@ import {
 } from './vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
-import { initialState, reduce, commitHash, SCHEMA_VERSION, STAGE_STALE_SECS } from './state.mjs'
+import { initialState, reduce, commitHash, flavorRounds, SCHEMA_VERSION, STAGE_STALE_SECS } from './state.mjs'
 import { UI, MC_UI, fill } from './copy.mjs'
 import { mcEnabled, mcMode, mcSettings, saveMcSettings, siteConfig, generateDeck, liveQuip, closingRoast } from './mc.mjs'
 
@@ -550,7 +550,7 @@ async function onTap(ev) {
       const deck = await generateDeck({
         groupContext: m.groupContext, spice: m.spice, avoid: m.avoid,
         playerNames: s.players.map(p => p.name),
-      }, ctx.content.deck)
+      }, { rounds: flavorRounds(ctx.content, ctx.ui.flavor || 'mild') })
       ctx.ui.generating = false
       if (deck) {
         // generated decks carry rounds 1-4; the warm-up pool stays static
@@ -560,10 +560,14 @@ async function onTap(ev) {
         localStorage.setItem(`ntg:${ctx.gid}:mcdeck`, JSON.stringify(deck))
       }
     }
-    return send(`host:start:${now()}`, { type: 'start', practice: ctx.ui.practice !== false })
+    return send(`host:start:${now()}`, { type: 'start', practice: ctx.ui.practice !== false, flavor: ctx.ui.flavor || 'mild' })
   }
   if (act === 'practice-toggle') {
     ctx.ui.practice = ctx.ui.practice === false
+    return render()
+  }
+  if (act === 'flavor') {
+    ctx.ui.flavor = el.dataset.v
     return render()
   }
 
@@ -599,7 +603,7 @@ const seated = () => [...(ctx.state?.players || [])].sort((a, b) => a.seat - b.s
 const myPair = () => ctx.state?.pairs.find(p => p.includes(ctx.pub))
 const counterpart = () => { const p = myPair(); return p ? (p[0] === ctx.pub ? p[1] : p[0]) : null }
 const amIn = () => ctx.state?.players.some(p => p.pub === ctx.pub)
-const promptText = () => ctx.state.promptText || ctx.content.deck.rounds
+const promptText = () => ctx.state.promptText || flavorRounds(ctx.content, ctx.state.flavor)
   .find(r => r.round === ctx.state.round)?.prompts.find(p => p.id === ctx.state.promptId)?.text || ''
 
 // drama beat: cards keyed here render "…" for 1s the first time they appear.
@@ -771,6 +775,12 @@ function vLobby() {
       ${btn(mcEnabled() ? UI.aiOn : UI.aiSetup, 'mc-open', '', 'btn ghost')}
       ${ctx.ui.generating ? `<p class="quip">${esc(UI.aiGenerating)}</p>` : ''}
       ${ctx.ui.mcDeck && !ctx.ui.generating ? `<p class="mute small">${esc(UI.aiDeckReady)}</p>` : ''}
+      <p class="kicker">${esc(UI.flavorTitle)}</p>
+      ${[['mild', UI.flavorMild, UI.flavorMildDesc], ['spicy', UI.flavorSpicy, UI.flavorSpicyDesc],
+         ['scorching', UI.flavorScorching, UI.flavorScorchingDesc]].map(([v, label, desc]) => `
+        <button class="stash ${(ctx.ui.flavor || 'mild') === v ? 'sel' : ''}" data-act="flavor" data-v="${v}">
+          ${esc(label)}<span class="desc small mute"> — ${esc(desc)}</span>
+        </button>`).join('')}
       ${btn(ctx.ui.practice !== false ? UI.practiceOn : UI.practiceOff, 'practice-toggle', '', 'btn ghost')}
       <p class="mute small">${esc(UI.practiceHint)}</p>
       ${s.players.length >= 3 && !ctx.ui.generating
@@ -821,7 +831,7 @@ function hostBar(...buttons) {
 const roundKicker = () => {
   const s = ctx.state
   if (s.round === 0) return esc(UI.practiceLabel)
-  const name = ctx.content.deck.rounds[s.round - 1]?.name
+  const name = flavorRounds(ctx.content, s.flavor).find(r => r.round === s.round)?.name
   return `${esc(fill(UI.roundLabel, { n: String(s.round) }))}${name ? ` · ${esc(name)}` : ''}`
 }
 const coach = (text) => ctx.state.round === 0 ? `<p class="coach">${esc(text)}</p>` : ''

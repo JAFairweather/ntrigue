@@ -43,6 +43,11 @@ opening the landing page with `#r=<url,url>` before tapping New Game).
 - All timers are soft; every phase tolerates relay straggle with
   "waiting on …" states. Refresh/crash rejoins at the current phase from
   localStorage + the latest state event.
+- **Deck flavors**: the host picks the night's heat in the lobby —
+  Innocent (guilty pleasures and harmless habits; the default, built to be
+  the very-playable first game), Spicy (the original deck), or Scorching
+  (old flames, closed doors). Each is a full 4-round deck; generated (AI)
+  decks bypass flavors.
 - **Warm-up round** (host toggle in the lobby, on by default): round 0 runs
   the full answer→match→choose→outcome loop on a mild prompt pool with
   coaching lines on every screen, ends in a debrief, and wipes scores,
