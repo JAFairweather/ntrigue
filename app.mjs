@@ -96,7 +96,10 @@ async function enterGame({ gid, relays, hostPub }) {
     // restore a generated deck across refreshes — host-local only, per spec
     try {
       const gen = JSON.parse(localStorage.getItem(`ntg:${ctx.gid}:mcdeck`) || 'null')
-      if (gen?.rounds) { ctx.content = { ...ctx.content, deck: gen }; ctx.ui.mcDeck = true }
+      if (gen?.rounds) {
+        ctx.content = { ...ctx.content, deck: { ...gen, practice: ctx.content.deck.practice } }
+        ctx.ui.mcDeck = true
+      }
     } catch { /* fall back to the static deck */ }
   }
   ctx.net = new Net(ctx.relays)
@@ -111,19 +114,8 @@ async function enterGame({ gid, relays, hostPub }) {
   else if (ctx.isHost) ctx.state = initialState({ gid: ctx.gid, host: ctx.pub, relays: ctx.relays })
   if (ctx.isHost) await hostCatchUp()
 
-  // the host is the source of truth — it never re-reads its own state events
-  if (!ctx.isHost) ctx.unsubs.push(ctx.net.subscribe(
-    [{ kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)] }],
-    applyStateEvent))
-  ctx.unsubs.push(ctx.net.subscribe(
-    [{ kinds: [1059], '#p': [ctx.pub] }],
-    () => refreshCollected()))
-  if (ctx.isHost) {
-    ctx.unsubs.push(ctx.net.subscribe(
-      [{ kinds: [KIND_APP], '#t': [ctx.gid] }],
-      (e) => hostIngest(e)))
-    if (!remote) { await publishState(); netSelfCheck() }
-  }
+  subscribeAll()
+  if (ctx.isHost && !remote) { await publishState(); netSelfCheck() }
   refreshCollected()
   render()
   setInterval(tick, 1000)             // soft timers + retries + stage watchdog
@@ -295,21 +287,60 @@ async function deliverAnswer() {
   } finally { deliveringAnswer = false }
 }
 
-// Poll fallback: live subscriptions die when a phone sleeps (mobile browsers
-// kill background sockets and don't always resubscribe). Every few seconds,
-// and on every return to the foreground, fetch what push should have brought.
+// All live subscriptions in one place, so a pool rebuild can re-arm them.
+// The host is the source of truth — it never re-reads its own state events.
+function subscribeAll() {
+  if (!ctx.isHost) ctx.unsubs.push(ctx.net.subscribe(
+    [{ kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)] }],
+    applyStateEvent))
+  ctx.unsubs.push(ctx.net.subscribe(
+    [{ kinds: [1059], '#p': [ctx.pub] }],
+    () => refreshCollected()))
+  if (ctx.isHost) ctx.unsubs.push(ctx.net.subscribe(
+    [{ kinds: [KIND_APP], '#t': [ctx.gid] }],
+    (e) => hostIngest(e)))
+}
+
+// Sleeping phones leave zombie connections: they look open, deliver nothing,
+// and swallow everything sent. The state event is the liveness probe — it
+// always exists once a game has started, so a few consecutive misses means
+// the pipes are dead. Tear the whole pool down and rebuild it. No player
+// should ever need to reload the page by hand.
+let probeMisses = 0
+async function rebuildNet() {
+  for (const u of ctx.unsubs.splice(0)) { try { u() } catch { /* gone */ } }
+  try { ctx.net.close() } catch { /* gone */ }
+  ctx.net = new Net(ctx.relays)
+  subscribeAll()
+  if (ctx.isHost) { await hostCatchUp().catch(console.error); await publishState() }
+  deliverAnswer().catch(console.error)
+  autoEffects().catch(console.error)
+  refreshCollected()
+}
+
+// Poll fallback: every few seconds, and on every return to the foreground,
+// fetch what push should have brought — and rebuild the pool when even that
+// goes quiet.
 let polling = false
 async function pollNet() {
   if (polling || !ctx.net || !ctx.gid) return
   polling = true
   try {
+    const [remote] = await ctx.net.query({
+      kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)],
+    }).catch(() => [])
+    if (remote) {
+      probeMisses = 0
+      if (!ctx.isHost) applyStateEvent(remote)
+    } else if (ctx.state && ctx.state.phase !== 'lobby' && ++probeMisses >= 3) {
+      // the state event exists — three straight misses means dead pipes
+      probeMisses = 0
+      await rebuildNet()
+      return
+    }
     if (ctx.isHost) {
       if (await hostCatchUp()) onStateChanged()
     } else {
-      const [remote] = await ctx.net.query({
-        kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)],
-      }).catch(() => [])
-      if (remote) applyStateEvent(remote)
       refreshCollected()
     }
   } finally { polling = false }
@@ -325,8 +356,9 @@ async function autoEffects() {
 async function autoEffectsInner(s) {
   const me = ctx.pub
 
-  // remember my counterpart for each round (window closes when pairs rotate)
-  if (s.pairs?.length && s.round > 0) {
+  // remember my counterpart for each round (window closes when pairs rotate) —
+  // round 0 (the warm-up) needs this too, its trades are the teaching moment
+  if (s.pairs?.length) {
     const pair = s.pairs.find(p => p.includes(me))
     if (pair) {
       const other = pair[0] === me ? pair[1] : pair[0]
@@ -351,7 +383,7 @@ async function autoEffectsInner(s) {
   // if I shared, deliver my secret to my counterpart — the trade itself
   for (const [round, pend] of Object.entries(ctx.local.pending)) {
     const r = Number(round)
-    const resolvedPast = s.round > r || (s.round === r && ['outcome', 'scoreboard', 'finale_intro', 'finale', 'final'].includes(s.phase))
+    const resolvedPast = s.round > r || (s.round === r && ['outcome', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final'].includes(s.phase))
     const scope = ctx.local.scopes[r]
     const other = ctx.local.pairsByRound[r]
     // wait for the sealed copy to be accepted before handing over its key —
@@ -521,13 +553,18 @@ async function onTap(ev) {
       }, ctx.content.deck)
       ctx.ui.generating = false
       if (deck) {
-        ctx.content = { ...ctx.content, deck }
+        // generated decks carry rounds 1-4; the warm-up pool stays static
+        ctx.content = { ...ctx.content, deck: { ...deck, practice: ctx.content.deck.practice } }
         ctx.ui.mcDeck = true
         // logged locally on the host phone for post-game review — never published
         localStorage.setItem(`ntg:${ctx.gid}:mcdeck`, JSON.stringify(deck))
       }
     }
-    return send(`host:start:${now()}`, { type: 'start' })
+    return send(`host:start:${now()}`, { type: 'start', practice: ctx.ui.practice !== false })
+  }
+  if (act === 'practice-toggle') {
+    ctx.ui.practice = ctx.ui.practice === false
+    return render()
   }
 
   // host controls — all funnel through the reducer
@@ -624,8 +661,8 @@ function render() {
   else if (!amIn()) html = vCard(`<p class="mute">${esc(UI.notFound)}</p>`)
   else html = ({
     lobby: vLobby, prompt: vPrompt, pairing: vPairing, dilemma: vDilemma,
-    outcome: vOutcome, scoreboard: vScoreboard, finale_intro: vFinaleIntro,
-    finale: vFinale, final: vFinal,
+    outcome: vOutcome, debrief: vDebrief, scoreboard: vScoreboard,
+    finale_intro: vFinaleIntro, finale: vFinale, final: vFinal,
   }[s.phase] || (() => ''))()
   const stageChip = s?.stage && amIn()
     ? `<div class="stage-chip">${esc(fill(UI.tvCodeChip, { code: s.code }))}</div>` : ''
@@ -734,6 +771,8 @@ function vLobby() {
       ${btn(mcEnabled() ? UI.aiOn : UI.aiSetup, 'mc-open', '', 'btn ghost')}
       ${ctx.ui.generating ? `<p class="quip">${esc(UI.aiGenerating)}</p>` : ''}
       ${ctx.ui.mcDeck && !ctx.ui.generating ? `<p class="mute small">${esc(UI.aiDeckReady)}</p>` : ''}
+      ${btn(ctx.ui.practice !== false ? UI.practiceOn : UI.practiceOff, 'practice-toggle', '', 'btn ghost')}
+      <p class="mute small">${esc(UI.practiceHint)}</p>
       ${s.players.length >= 3 && !ctx.ui.generating
         ? btn(UI.lobbyStart, 'start-night', '', 'btn hot big')
         : `<p class="mute small">${esc(UI.lobbyNeedPlayers)}</p>`}` : ''}
@@ -777,14 +816,25 @@ function hostBar(...buttons) {
   return `<div class="hostbar">${buttons.join('')}</div>`
 }
 
+// round-0-safe header: the warm-up gets its own label, real rounds keep
+// 'Round n · deck name'; coach lines appear only during the warm-up
+const roundKicker = () => {
+  const s = ctx.state
+  if (s.round === 0) return esc(UI.practiceLabel)
+  const name = ctx.content.deck.rounds[s.round - 1]?.name
+  return `${esc(fill(UI.roundLabel, { n: String(s.round) }))}${name ? ` · ${esc(name)}` : ''}`
+}
+const coach = (text) => ctx.state.round === 0 ? `<p class="coach">${esc(text)}</p>` : ''
+
 function vPrompt() {
   const s = ctx.state
   const missing = seated().filter(p => !s.answered[p.pub]).map(p => p.name)
   const mine = ctx.local.scopes[s.round]
   const done = s.answered[ctx.pub] || (mine && mine.prompt === s.promptId)
   return vCard(`
-    <p class="kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))} · ${esc(ctx.content.deck.rounds[s.round - 1].name)}</p>
+    <p class="kicker">${roundKicker()}</p>
     <h2 class="prompt">${esc(promptText())}</h2>
+    ${coach(UI.coachPrompt)}
     ${done ? `
       <p class="locked">🔒 ${esc(UI.promptLocked)}</p>
       ${s.answered[ctx.pub]
@@ -801,12 +851,16 @@ function vPrompt() {
 
 function vPairing() {
   const s = ctx.state
-  const cards = s.pairs.map(([a, b]) =>
-    `<div class="matchup">${esc(nameOf(a))} <span class="vs">⇄</span> ${esc(nameOf(b))}</div>`).join('')
+  const cards = s.pairs.map(([a, b]) => {
+    const mine = [a, b].includes(ctx.pub)
+    return `<div class="matchup ${mine ? 'mine' : ''}">${esc(nameOf(a))} <span class="vs">⇄</span> ${esc(nameOf(b))}</div>`
+  }).join('')
+  const other = counterpart()
   const out = seated().filter(p => !s.pairs.flat().includes(p.pub))
   return vCard(`
-    <p class="kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))} · ${esc(UI.pairingTitle)}</p>
+    <p class="kicker">${roundKicker()} · ${esc(UI.pairingTitle)}</p>
     ${cards}
+    ${other ? `<p class="locked">${esc(fill(UI.yourMatch, { name: nameOf(other) }))}</p>` : ''}
     ${out.map(p => `<p class="mute small">${esc(fill(UI.sittingOut, { name: p.name }))}</p>`).join('')}
     <p class="quip">${esc(s.quip)}</p>
   `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
@@ -820,15 +874,17 @@ function vDilemma() {
   const left = timerLeft(15)
   const committed = s.commits[ctx.pub] || ctx.local.pending[s.round]
   return vCard(`
-    <p class="kicker">${esc(fill(UI.roundLabel, { n: String(s.round) }))}</p>
+    <p class="kicker">${roundKicker()}</p>
     <h2>${esc(fill(UI.dilemmaVs, { name: nameOf(other) }))}</h2>
     <p class="mute">${esc(fill(UI.dilemmaStakes, { name: nameOf(other) }))}</p>
+    ${coach(UI.coachDilemma)}
     ${committed ? `<p class="locked">🔒 ${esc(fill(UI.dilemmaLockedIn, { name: nameOf(other) }))}</p>` : `
       <div class="timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>
       <div class="choices">
         <button class="btn choice share" data-act="choose" data-choice="SHARE">${esc(UI.dilemmaShare)}</button>
         <button class="btn choice hold" data-act="choose" data-choice="HOLD">${esc(UI.dilemmaHold)}</button>
-      </div>`}
+      </div>
+      <p class="mute small">${esc(UI.dilemmaCheat)}</p>`}
   `, 'center') + hostBar(btn(UI.hostForce, 'host', 'data-t="force"', 'btn ghost'))
 }
 
@@ -864,6 +920,15 @@ function vOutcome() {
     <h2 class="${o.kind === 'betrayal' ? 'hot-text' : ''}">${esc(headline)}</h2>
     <p class="quip">${esc(o.quip)}</p>
     ${sub}
+    ${coach(UI.coachOutcome)}
+  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+}
+
+function vDebrief() {
+  return vCard(`
+    <h2>${esc(UI.debriefTitle)}</h2>
+    <p>${esc(UI.debriefBody)}</p>
+    <p class="quip">${esc(UI.debriefReset)}</p>
   `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
 }
 

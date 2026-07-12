@@ -25,9 +25,10 @@ const check = (where, text) => {
 const { UI } = await import('../copy.mjs')
 for (const [k, v] of Object.entries(UI)) check(`copy.mjs UI.${k}`, v)
 
-// 2. every prompt in the deck
+// 2. every prompt in the deck — warm-up pool included
 const deck = JSON.parse(await readFile(new URL('../deck.json', import.meta.url)))
-for (const r of deck.rounds) for (const p of r.prompts) check(`deck #${p.id}`, p.text)
+const allPrompts = [...(deck.practice || []), ...deck.rounds.flatMap(r => r.prompts)]
+for (const p of allPrompts) check(`deck #${p.id}`, p.text)
 
 // 3. every quip variant
 const quips = JSON.parse(await readFile(new URL('../quips.json', import.meta.url)))
@@ -42,5 +43,5 @@ const visible = html
 check('index.html', visible)
 
 assert.deepEqual(failures, [], `banned protocol vocabulary reached player-facing copy:\n${failures.join('\n')}`)
-console.log(`banned-words ok — ${Object.keys(UI).length} UI strings, 40 prompts, ` +
+console.log(`banned-words ok — ${Object.keys(UI).length} UI strings, ${allPrompts.length} prompts, ` +
   `${Object.values(quips.quips).flat().length} quips, index.html: all clean.`)

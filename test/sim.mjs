@@ -64,6 +64,41 @@ for (const p of P) apply({ type: 'join', pub: p.pub, name: p.name })
 apply({ type: 'join', pub: marco.pub, name: 'Marco' }, false)        // dup join ignored
 apply({ type: 'order', pub: james.pub, order: P.map(p => p.pub) })
 apply({ type: 'start', pub: sarah.pub }, false)                      // only host starts
+
+// ---- warm-up round (round 0): the full loop on a fork of the lobby state —
+// mild pool, R1 pairing pattern, points visibly land, then the debrief wipes
+{
+  let s = reduce(state, { type: 'start', pub: james.pub, practice: true }, content)
+  assert.notEqual(s, state)
+  assert.equal(s.round, 0)
+  assert.equal(s.practice, true)
+  assert.equal(s.phase, 'prompt')
+  assert.ok(content.deck.practice.some(p => p.id === s.promptId), 'warm-up draws from the mild pool')
+  const step = (act) => { const n = reduce(s, act, content); assert.notEqual(n, s, `warm-up: ${JSON.stringify(act)}`); s = n }
+  for (const p of P) step({ type: 'answered', pub: p.pub, round: 0 })
+  assert.equal(s.phase, 'pairing')
+  assert.deepEqual(s.pairs, pairingsFor(s.players, 1), 'warm-up uses round 1 pattern')
+  step({ type: 'advance', pub: james.pub })
+  const wchoice = { [james.pub]: 'SHARE', [priya.pub]: 'HOLD', [sarah.pub]: 'SHARE', [marco.pub]: 'SHARE' }
+  for (const p of P) step({ type: 'commit', pub: p.pub, round: 0, hash: commitHash(wchoice[p.pub], 'n0') })
+  for (const p of P) step({ type: 'reveal', pub: p.pub, round: 0, choice: wchoice[p.pub], nonce: 'n0' })
+  assert.equal(s.phase, 'outcome')
+  assert.equal(s.scores[priya.pub], 5, 'warm-up scores land so people see the numbers')
+  assert.equal(s.daggers[priya.pub], 1)
+  step({ type: 'advance', pub: james.pub })                          // second outcome card
+  step({ type: 'advance', pub: james.pub })
+  assert.equal(s.phase, 'debrief', 'warm-up ends in a debrief, not a scoreboard')
+  step({ type: 'advance', pub: james.pub })
+  assert.equal(s.phase, 'prompt')
+  assert.equal(s.round, 1)
+  assert.equal(s.practice, false)
+  assert.deepEqual(s.scores, {}, 'debrief wipes scores')
+  assert.deepEqual(s.daggers, {})
+  assert.deepEqual(s.collected, {}, 'warm-up secrets are not finale ammunition')
+  assert.deepEqual(s.counters, {}, 'style counters reset too')
+  assert.ok(content.deck.rounds.find(r => r.round === 1).prompts.some(p => p.id === s.promptId))
+}
+
 host('start')
 assert.equal(state.phase, 'prompt')
 assert.equal(state.round, 1)

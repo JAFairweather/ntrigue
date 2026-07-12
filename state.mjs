@@ -13,8 +13,10 @@ import { sha256, bytesToHex } from './vendor/nostr-tools.js'
 
 export const SCHEMA_VERSION = 2
 
-export const PHASES = ['lobby', 'prompt', 'pairing', 'dilemma', 'outcome', 'scoreboard', 'finale_intro', 'finale', 'final']
+export const PHASES = ['lobby', 'prompt', 'pairing', 'dilemma', 'outcome', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
 export const ROUNDS = 4
+// Round 0 is the optional warm-up: the full answer→match→choose→outcome loop
+// with a mild prompt, everything visibly scored — then wiped at the debrief.
 
 export const PAYOFF = { trade: 3, betrayWin: 5, betrayLose: 1, hold: 1 }
 export const FINALE = { extortPrice: 3, revealBonus: 2, burnBonus: 1, vaultBonus: 2 }
@@ -47,6 +49,7 @@ export function initialState({ gid, host, relays }) {
     phase: 'lobby',
     phaseAt: 0,                 // set by host on each publish (unix seconds)
     round: 0,
+    practice: false,            // true during the warm-up round (round 0)
     players: [],                // [{pub, name, seat}] — seat assigned at start
     promptId: null,
     promptText: null,           // the drawn prompt's text — carries generated
@@ -203,8 +206,12 @@ function evalStyles(state, content) {
 }
 
 function drawPrompt(state, content) {
-  const pool = content.deck.rounds.find(r => r.round === state.round).prompts
-    .filter(p => !state.usedPrompts.includes(p.id))
+  // round 0 draws from the mild warm-up pool (fall back to round 1's pool
+  // for decks without one, e.g. generated decks)
+  const source = state.round === 0
+    ? (content.deck.practice || content.deck.rounds.find(r => r.round === 1).prompts)
+    : content.deck.rounds.find(r => r.round === state.round).prompts
+  const pool = source.filter(p => !state.usedPrompts.includes(p.id))
   const chosen = pool[seed32(`draw:${state.gid}:${state.draws}`) % pool.length]
   state.draws++
   state.promptId = chosen.id
@@ -223,7 +230,7 @@ function startRound(state, content, round) {
 
 function toPairing(state, content) {
   state.phase = 'pairing'
-  state.pairs = pairingsFor(state.players, state.round)
+  state.pairs = pairingsFor(state.players, state.round || 1)   // warm-up uses R1's pattern
   const [a, b] = state.pairs[0].map(p => nameOf(state, p))
   state.quip = quip(content, partnerRound(state.round) ? 'pairing_partner' : 'pairing',
     { a, b }, `${state.gid}:${state.round}`)
@@ -348,7 +355,8 @@ export function reduce(prev, act, content) {
     }
     case 'start':
       if (state.phase !== 'lobby' || state.players.length < 3) return prev
-      startRound(state, content, 1)
+      if (act.practice) { state.practice = true; startRound(state, content, 0) }
+      else startRound(state, content, 1)
       return state
 
     case 'answered': {
@@ -465,7 +473,15 @@ export function reduce(prev, act, content) {
         case 'pairing': state.phase = 'dilemma'; return state
         case 'outcome':
           if (state.outcomeStep + 1 < state.outcomes.length) { state.outcomeStep++; return state }
+          if (state.round === 0) { state.phase = 'debrief'; state.quip = ''; return state }
           toScoreboard(state, content)
+          return state
+        case 'debrief':                                // warm-up over: wipe everything it touched
+          Object.assign(state, {
+            practice: false, scores: {}, daggers: {}, suffered: {}, collected: {},
+            counters: {}, styles: {}, styleHist: {}, styleSeq: 0, styleChange: null,
+          })
+          startRound(state, content, 1)
           return state
         case 'scoreboard':
           if (state.round < ROUNDS) startRound(state, content, state.round + 1)
