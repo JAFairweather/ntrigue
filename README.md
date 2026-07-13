@@ -48,6 +48,12 @@ opening the landing page with `#r=<url,url>` before tapping New Game).
   the very-playable first game), Spicy (the original deck), or Scorching
   (old flames, closed doors). Each is a full 4-round deck; generated (AI)
   decks bypass flavors.
+- **Robot guests** (host lobby button): host-driven stand-in players so one
+  person can try a full night. Bots run through the same reducer and move
+  their secrets the same way — sealed copies and handovers under their own
+  identities — answering, trading (70% share), and playing the finale
+  (extort / burn / vault, pay / refuse, reveal / fold) with human-feeling
+  delays. Test them with `node test/bots.mjs`.
 - **Warm-up round** (host toggle in the lobby, on by default): round 0 runs
   the full answer→match→choose→outcome loop on a mild prompt pool with
   coaching lines on every screen, ends in a debrief, and wipes scores,
@@ -71,6 +77,7 @@ from the landing screen.
 node test/banned-words.mjs   # the language rule, over all player-visible copy
 node test/sim.mjs            # full scripted game through reducer + real crypto
                              # + adversarial relay-observer + stage-privacy checks
+node test/bots.mjs           # the solo night: 1 human + 2 robot guests to the end
 node test/e2e.mjs            # 4 real browsers + a TV stage play a complete night
                              # (dev deps: npm i playwright ws — not committed;
                              #  PLAYWRIGHT_CHROMIUM=<path> to override the browser)

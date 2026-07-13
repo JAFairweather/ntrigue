@@ -21,9 +21,11 @@ const check = (where, text) => {
   if (m) failures.push(`${where}: "${m[1]}" in ${JSON.stringify(text.slice(0, 80))}`)
 }
 
-// 1. every UI string
-const { UI } = await import('../copy.mjs')
+// 1. every UI string, robot-guest names, and robot-guest canned secrets
+const { UI, BOT } = await import('../copy.mjs')
 for (const [k, v] of Object.entries(UI)) check(`copy.mjs UI.${k}`, v)
+for (const n of BOT.names) check('copy.mjs BOT.names', n)
+BOT.lines.forEach((l, i) => check(`copy.mjs BOT.lines[${i}]`, l))
 
 // 2. every prompt in the deck — warm-up pool and all three flavors
 const deck = JSON.parse(await readFile(new URL('../deck.json', import.meta.url)))
