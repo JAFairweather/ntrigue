@@ -854,7 +854,8 @@ const vPayoff = () => [
   [UI.howtoBothShare, UI.howtoBothShareOut],
   [UI.howtoOneShares, UI.howtoOneSharesOut],
   [UI.howtoBothHold, UI.howtoBothHoldOut],
-].map(([l, o]) => `<div class="payoff"><b>${esc(l)}</b><span class="small">${esc(o)}</span></div>`).join('')
+].map(([l, o]) => `<div class="payoff"><b>${esc(l)}</b><span class="small">${esc(o)}</span></div>`).join('') +
+  `<p class="small payoff-choice">${esc(UI.howtoChoice)}</p>`
 const vSteps = (...ts) => ts.map((t, i) => `<p class="small">${i + 1}. ${esc(t)}</p>`).join('')
 const vSheet = () => `<div class="sheet"><div class="sheet-inner">
   <h3>${esc(UI.howtoTitle)}</h3>

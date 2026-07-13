@@ -251,7 +251,7 @@ function vLobby() {
     <h1 class="tv-logo tv-logo-sm">${esc(UI.title)}</h1>
     <div class="tv-tiles">
       ${tile(UI.howtoTitle, para(UI.howtoWhat) + steps(UI.howtoStep1, UI.howtoStep2, UI.howtoStep3))}
-      ${tile(UI.howtoRoundHead, payoff)}
+      ${tile(UI.howtoRoundHead, payoff + `<p class="tv-goal">${esc(UI.howtoChoice)}</p>`)}
       ${tile(UI.howtoFinaleHead, steps(UI.howtoFin1, UI.howtoFin2, UI.howtoFin3) +
         `<p class="tv-goal">${esc(UI.howtoObjective)}</p>`)}
     </div>

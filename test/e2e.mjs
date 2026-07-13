@@ -98,7 +98,7 @@ await see(james, 'matchups')
 await see(james, 'Your match this round: Priya')     // the explicit who-am-I-against line
 await tap(james, 'Next')
 for (const name of NAMES) {
-  await see(pages[name], 'Both share: +3 each')      // payoff cheat right on the choice screen
+  await see(pages[name], 'Your choice')              // payoff cheat right on the choice screen
   await tap(pages[name], 'SHARE')
 }
 await see(james, 'traded')

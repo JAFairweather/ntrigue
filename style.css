@@ -212,6 +212,8 @@ input:focus, textarea:focus { border-color: var(--gold); }
 }
 .payoff b { color: var(--gold); font-size: .9rem; letter-spacing: .04em; }
 
+.payoff-choice { color: var(--gold); font-style: italic; }
+
 /* warm-up coaching lines + your own matchup highlighted */
 .coach {
   color: var(--gold); font-style: italic; font-size: .9rem; line-height: 1.4;
