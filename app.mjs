@@ -13,7 +13,7 @@ import {
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
 import { initialState, reduce, commitHash, flavorRounds, SCHEMA_VERSION, STAGE_STALE_SECS } from './state.mjs'
-import { UI, MC_UI, fill } from './copy.mjs'
+import { UI, MC_UI, BOT, fill } from './copy.mjs'
 import { mcEnabled, mcMode, mcSettings, saveMcSettings, siteConfig, generateDeck, liveQuip, closingRoast } from './mc.mjs'
 
 const $ = (sel) => document.querySelector(sel)
@@ -256,6 +256,7 @@ async function send(dSuffix, payload) {
 function onStateChanged() {
   autoEffects().catch(console.error)
   deliverAnswer().catch(console.error)
+  botTick()
   render()
 }
 
@@ -420,6 +421,168 @@ async function refreshCollected() {
   } finally { refreshing = false }
 }
 
+// ---------------------------------------------------------------- robot guests
+// Host-driven stand-in players, so one person can play a full night. Bots
+// go through the SAME reducer as everyone else and their secrets travel the
+// same way — sealed copies and handovers made with their own identities —
+// so solo play exercises the real pipeline, including the moment a human
+// reads a robot's secret.
+const botFired = new Set()
+const claim = (k) => { if (botFired.has(k)) return false; botFired.add(k); return true }
+const unclaim = (k) => botFired.delete(k)
+const botDelay = () => 800 + Math.random() * 1800
+const botPubs = {}
+const botPub = (bot) => botPubs[bot.sk] ??= getPublicKey(hexToBytes(bot.sk))
+
+async function addBot() {
+  const bots = ctx.local.bots = ctx.local.bots || []
+  if ((ctx.state?.players.length || 0) >= 6 || bots.length >= BOT.names.length) return
+  const used = new Set(bots.map(b => b.name))
+  const base = BOT.names.find(n => !used.has(`${n} 🤖`))
+  if (!base) return
+  const bot = { sk: bytesToHex(generateSecretKey()), name: `${base} 🤖` }
+  bots.push(bot)
+  saveLocal()
+  await hostApply({ type: 'join', pub: botPub(bot), name: bot.name })
+}
+
+function botTick() {
+  if (!ctx.isHost || !ctx.state) return
+  for (const bot of ctx.local.bots || []) botAct(bot).catch(console.error)
+}
+
+async function botAct(bot) {
+  const s = ctx.state
+  const pub = botPub(bot)
+  if (!s.players.some(p => p.pub === pub)) return
+  const store = ctx.local.botData = ctx.local.botData || {}
+  const data = store[pub] = store[pub] || { scopes: {}, pending: {}, granted: {}, pairs: {}, stash: {} }
+  const save = () => { store[pub] = data; saveLocal() }
+
+  // answer the prompt: seal a canned line, then raise the done flag
+  if (s.phase === 'prompt' && !s.answered[pub]) {
+    const k = `ans:${s.round}:${s.promptId}:${pub}`
+    if (claim(k)) setTimeout(async () => {
+      try {
+        const line = BOT.lines[Math.floor(Math.random() * BOT.lines.length)]
+        const scopeId = bytesToHex(crypto.getRandomValues(new Uint8Array(8)))
+        const scopeKey = newScopeKey()
+        data.scopes[s.round] = { scopeId, key: b64(scopeKey), text: line }
+        save()
+        await publishScope(ctx.net, hexToBytes(bot.sk), {
+          scopeId, generation: 1, scopeKey,
+          payload: { text: line, round: s.round, prompt: s.promptId },
+        }).catch(() => {})       // a refused seal must not stall the bot
+        await hostApply({ type: 'answered', round: ctx.state.round, pub })
+      } catch (e) { unclaim(k); console.error('bot answer failed', e) }
+    }, botDelay())
+  }
+
+  // choose in the dark: commit, then reveal once both commitments exist
+  if (s.phase === 'dilemma' && s.pairs.flat().includes(pub)) {
+    const pair = s.pairs.find(p => p.includes(pub))
+    const other = pair[0] === pub ? pair[1] : pair[0]
+    if (data.pairs[s.round] !== other) { data.pairs[s.round] = other; save() }
+    if (!s.commits[pub]) {
+      const k = `cmt:${s.round}:${pub}`
+      if (claim(k)) setTimeout(async () => {
+        try {
+          const choice = Math.random() < 0.7 ? 'SHARE' : 'HOLD'
+          const pending = { choice, nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(16))) }
+          data.pending[s.round] = pending
+          save()
+          await hostApply({ type: 'commit', round: s.round, hash: commitHash(choice, pending.nonce), pub })
+        } catch (e) { unclaim(k); console.error('bot commit failed', e) }
+      }, botDelay())
+    }
+    const mine = data.pending[s.round]
+    if (mine && s.commits[pub] && s.commits[other] && !s.choices[pub] && claim(`rvl:${s.round}:${pub}`))
+      await hostApply({ type: 'reveal', round: s.round, choice: mine.choice, nonce: mine.nonce, pub })
+  }
+
+  // after a round resolves: hand over the sealed copy if the bot shared
+  for (const [r, pend] of Object.entries(data.pending)) {
+    const rr = Number(r)
+    const done = s.round > rr || (s.round === rr &&
+      ['outcome', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final'].includes(s.phase))
+    const scope = data.scopes[rr]
+    const other = data.pairs[rr]
+    if (pend.choice === 'SHARE' && done && scope && other && !data.granted[rr]) {
+      const k = `gr:${rr}:${pub}`
+      if (!claim(k)) continue
+      try {
+        await grant(ctx.net, hexToBytes(bot.sk), other, {
+          scopeId: scope.scopeId, generation: 1, scopeKey: unb64(scope.key),
+          scopeName: `r${rr}`, relayHint: ctx.relays[0],
+        })
+        data.granted[rr] = true
+        save()
+      } catch (e) { unclaim(k); console.error('bot handover failed', e) }
+    }
+  }
+
+  // collect what was shared WITH the bot — it needs the words to blackmail
+  const owed = (s.collected[pub] || []).filter(c => data.stash[`${c.owner}:${c.round}`] === undefined)
+  if (owed.length) {
+    const k = `stash:${pub}:${owed.map(c => `${c.owner.slice(0, 8)}:${c.round}`).join(',')}`
+    if (claim(k)) {
+      try {
+        const grants = latestGrants(await receiveGrants(ctx.net, hexToBytes(bot.sk)))
+        let got = false
+        for (const g of grants) {
+          const res = await fetchScope(ctx.net, g)
+          if (res.status === 'ok' && res.data?.round !== undefined) {
+            data.stash[`${g.publisher}:${res.data.round}`] = res.data.text
+            got = true
+          }
+        }
+        if (got) save()
+        if (owed.some(c => data.stash[`${c.owner}:${c.round}`] === undefined)) unclaim(k)
+      } catch { unclaim(k) }
+    }
+  }
+
+  // the finale: one move, a spine, and no mercy
+  if (s.phase === 'finale') {
+    const f = s.finale
+    const actor = f.order[f.turn]
+    if (f.step === 'choose' && actor === pub) {
+      const k = `fc:${f.turn}:${pub}`
+      if (claim(k)) setTimeout(async () => {
+        try {
+          const held = ctx.state.collected[pub] || []
+          const pickFrom = held.length ? held : null
+          if (!pickFrom) return    // reducer auto-vaults empty-handed players
+          const target = pickFrom[Math.floor(Math.random() * pickFrom.length)]
+          const text = data.stash[`${target.owner}:${target.round}`]
+          const roll = Math.random()
+          if (roll < 0.45)
+            await hostApply({ type: 'finale_choice', action: 'extort', owner: target.owner, round: target.round, pub })
+          else if (roll < 0.7 && text)
+            await hostApply({ type: 'finale_choice', action: 'burn', owner: target.owner, round: target.round, text, pub })
+          else
+            await hostApply({ type: 'finale_choice', action: 'vault', pub })
+        } catch (e) { unclaim(k); console.error('bot finale failed', e) }
+      }, botDelay())
+    }
+    if (f.step === 'extort' && f.action?.owner === pub) {
+      const k = `xr:${f.turn}:${pub}`
+      if (claim(k)) setTimeout(() => {
+        hostApply({ type: 'extort_response', pay: Math.random() < 0.5, turn: f.turn, pub })
+          .catch((e) => { unclaim(k); console.error('bot extort response failed', e) })
+      }, botDelay())
+    }
+    if (f.step === 'decide' && actor === pub) {
+      const k = `bd:${f.turn}:${pub}`
+      if (claim(k)) setTimeout(() => {
+        const text = data.stash[`${f.action.owner}:${f.action.round}`]
+        hostApply({ type: 'blackmail_decision', reveal: !!text && Math.random() < 0.6, text: text || '', turn: f.turn, pub })
+          .catch((e) => { unclaim(k); console.error('bot decision failed', e) })
+      }, botDelay())
+    }
+  }
+}
+
 // ---------------------------------------------------------------- tap handling
 
 async function onTap(ev) {
@@ -570,6 +733,7 @@ async function onTap(ev) {
     ctx.ui.flavor = el.dataset.v
     return render()
   }
+  if (act === 'bot-add') return addBot()
 
   // host controls — all funnel through the reducer
   if (act === 'host') return send(`host:${el.dataset.t}:${now()}`, { type: el.dataset.t })
@@ -626,6 +790,7 @@ function tick() {
   if (tickN % 4 === 0) {
     deliverAnswer().catch(console.error)
     autoEffects().catch(console.error)
+    botTick()
   }
   // pull what push should have brought — survives dead sockets after sleep
   if (tickN % 8 === 0) pollNet().catch(console.error)
@@ -771,6 +936,9 @@ function vLobby() {
     <p class="mute">${esc(fill(UI.lobbySeated, { n: String(s.players.length) }))}</p>
     ${ctx.isHost && s.players.length > 1 ? `<p class="small mute">${esc(UI.lobbySeatHint)}</p>` : ''}
     <ul class="seats">${rows || `<li class="mute">${esc(UI.lobbyWaiting)}</li>`}</ul>
+    ${ctx.isHost && s.players.length < 6 ? `
+      ${btn(UI.botAdd, 'bot-add', '', 'btn ghost')}
+      <p class="mute small">${esc(UI.botHint)}</p>` : ''}
     ${ctx.isHost ? `
       ${btn(mcEnabled() ? UI.aiOn : UI.aiSetup, 'mc-open', '', 'btn ghost')}
       ${ctx.ui.generating ? `<p class="quip">${esc(UI.aiGenerating)}</p>` : ''}

@@ -32,6 +32,8 @@ export const UI = {
   practiceOn: 'Warm-up round: on',
   practiceOff: 'Warm-up round: off',
   practiceHint: 'One throwaway round with a mild prompt, so everyone learns the moves. Scores reset after.',
+  botAdd: '+ Add a robot guest',
+  botHint: 'Robot guests fill empty chairs so you can try a night solo — they answer, trade, and blackmail all on their own.',
 
   joinTitle: 'Pull up a chair',
   joinNamePlaceholder: 'Your first name',
@@ -209,6 +211,27 @@ export const MC_UI = {
   save: 'Save',
   clear: 'Turn off + forget key',
   close: 'Close',
+}
+
+// Robot guests: stand-in players the host can seat to try a night solo.
+// Names and canned secrets are player-visible, so they live here and go
+// through the banned-word scan like everything else.
+export const BOT = {
+  names: ['Pixel', 'Nova', 'Sprocket', 'Widget', 'Echo'],
+  lines: [
+    'I clap when the plane lands. Every time.',
+    'I have been watering a plastic plant for two years.',
+    'I say "you too" when waiters tell me to enjoy my meal.',
+    'I practice my award-acceptance speech in the shower.',
+    'I once lost a staring contest to a cat.',
+    'I have never actually read the terms and conditions.',
+    'I wave back at people who were waving at someone behind me.',
+    'My browser has two hundred tabs open and I fear every one of them.',
+    'I eat the crust first so the best bite comes last.',
+    'I pretend to check my pockets when someone asks for change.',
+    'I rehearse my coffee order in line and still get it wrong.',
+    'I keep a fancy candle I refuse to ever actually burn.',
+  ],
 }
 
 export const fill = (template, slots = {}) => {
