@@ -6,7 +6,7 @@
 
 import { generateSecretKey, getPublicKey, bytesToHex, hexToBytes, qrfactory } from '../vendor/nostr-tools.js'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, findGameByCode } from '../net.mjs'
-import { SCHEMA_VERSION, STAGE_PING_SECS, flavorRounds } from '../state.mjs'
+import { SCHEMA_VERSION, STAGE_PING_SECS, DEAL_SECS, flavorRounds } from '../state.mjs'
 import { UI, fill } from '../copy.mjs'
 
 const $ = (sel) => document.querySelector(sel)
@@ -113,7 +113,7 @@ async function connect({ gid, hostPub, relays, sk }, resumed = false) {
   setInterval(async () => {
     tickN++
     const s = ctx.state
-    if (s && (s.phase === 'dilemma' ||
+    if (s && (s.phase === 'deal' || s.phase === 'dilemma' ||
         (s.phase === 'finale' && s.finale?.step === 'extort'))) render()
     if (tickN % 10 === 0 && !polling) {
       polling = true
@@ -206,7 +206,7 @@ function render() {
   if (!ctx.gid) html = vEnter()
   else if (!s) html = card(`<h1 class="tv-logo">${esc(UI.title)}</h1><p class="tv-mute">${esc(UI.tvConnected)}</p>`)
   else html = ({
-    lobby: vLobby, prompt: vPrompt, pairing: vPairing, dilemma: vDilemma,
+    lobby: vLobby, prompt: vPrompt, pairing: vPairing, deal: vDeal, dilemma: vDilemma,
     outcome: vOutcome, debrief: vDebrief, scoreboard: vScoreboard, finale_intro: vFinaleIntro,
     finale: vFinale, final: vFinal,
   }[s.phase] || (() => ''))()
@@ -302,6 +302,20 @@ function vPairing() {
   `)
 }
 
+// The deal on the big screen: the pairs, the clock, and any 🤝 promises —
+// so the room feels the window and hears the promises get made
+function vDeal() {
+  const s = ctx.state
+  const left = timerLeft(DEAL_SECS)
+  return card(`
+    <p class="tv-kicker">${tvRoundKicker()}</p>
+    ${s.pairs.map(([a, b]) =>
+      `<div class="tv-names">${esc(nameOf(a).toUpperCase())}${s.promises[a] ? ' 🤝' : ''}<span class="vs">⇄</span>${esc(nameOf(b).toUpperCase())}${s.promises[b] ? ' 🤝' : ''}</div>`).join('')}
+    <div class="tv-timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>
+    <p class="tv-mute">${esc(UI.tvDeal)}</p>
+  `)
+}
+
 function vDilemma() {
   const s = ctx.state
   const left = timerLeft(15)
@@ -325,6 +339,7 @@ function vOutcome() {
     : fill(UI.outcomeBetrayal, { winner: nameOf(o.winner), loser: nameOf(o.loser) })
   return card(`
     <h1 class="tv-huge ${o.kind === 'betrayal' ? 'hot-text' : ''}">${esc(headline)}</h1>
+    ${(o.broken || []).map(p => `<p class="tv-body hot-text">${esc(fill(UI.promiseBroken, { name: nameOf(p) }))}</p>`).join('')}
     <p class="tv-quip">${esc(o.quip)}</p>
   `)
 }

@@ -33,6 +33,8 @@ const browser = await chromium.launch(
   process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {})
 const errors = []
 const context = await browser.newContext({ viewport: { width: 390, height: 720 } })
+// skip the Nave landing intro — it overlays the app and eats every tap
+await context.addInitScript(() => sessionStorage.setItem('naveIntroSeen', '1'))
 const host = await context.newPage()
 host.on('pageerror', (e) => errors.push(e.message))
 host.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })

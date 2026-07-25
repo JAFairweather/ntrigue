@@ -12,7 +12,7 @@ import {
 } from './vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
-import { initialState, reduce, commitHash, flavorRounds, SCHEMA_VERSION, STAGE_STALE_SECS } from './state.mjs'
+import { initialState, reduce, commitHash, flavorRounds, SCHEMA_VERSION, STAGE_STALE_SECS, DEAL_SECS } from './state.mjs'
 import { UI, MC_UI, BOT, fill } from './copy.mjs'
 import { mcEnabled, mcMode, mcSettings, saveMcSettings, siteConfig, generateDeck, liveQuip, closingRoast } from './mc.mjs'
 
@@ -478,6 +478,16 @@ async function botAct(bot) {
     }, botDelay())
   }
 
+  // the deal window: bots sometimes flash the (non-binding) promise — and
+  // being bots, they feel no obligation to keep it
+  if (s.phase === 'deal' && s.pairs.flat().includes(pub) && !s.promises[pub]) {
+    const k = `prm:${s.round}:${pub}`
+    if (claim(k)) setTimeout(() => {
+      if (Math.random() < 0.5) hostApply({ type: 'promise', round: ctx.state.round, pub })
+        .catch((e) => { unclaim(k); console.error('bot promise failed', e) })
+    }, botDelay())
+  }
+
   // choose in the dark: commit, then reveal once both commitments exist
   if (s.phase === 'dilemma' && s.pairs.flat().includes(pub)) {
     const pair = s.pairs.find(p => p.includes(pub))
@@ -631,6 +641,8 @@ async function onTap(ev) {
     render()
     return deliverAnswer().catch(console.error)
   }
+  if (act === 'promise')
+    return send(`prm:${s.round}:${ctx.pub}`, { type: 'promise', round: s.round })
   if (act === 'choose') {
     const choice = el.dataset.choice
     const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
@@ -796,13 +808,23 @@ function tick() {
   if (tickN % 8 === 0) pollNet().catch(console.error)
   const s = ctx.state
   if (!s) return
-  if (s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort'))
+  if (s.phase === 'deal' || s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort'))
     render()                            // countdown repaint
+  // the deal window closes itself: when the clock runs dry the host phone
+  // advances to the dilemma, once per window (the host can also tap Next)
+  if (ctx.isHost && s.phase === 'deal' && timerLeft(DEAL_SECS) === 0) {
+    const key = `${s.round}:${s.phaseAt}`
+    if (dealClosed !== key) {
+      dealClosed = key
+      send(`host:advance:${now()}`, { type: 'advance' })
+    }
+  }
   // stage watchdog: the TV heartbeats; if it goes quiet the host declares it
   // gone and every phone re-expands on the next state event
   if (ctx.isHost && s.stage && Math.floor(Date.now() / 1000) - (s.stageSeen || 0) > STAGE_STALE_SECS)
     send(`host:stage_gone:${now()}`, { type: 'stage_gone' })
 }
+let dealClosed = ''
 
 function timerLeft(total) {
   const left = total - (Math.floor(Date.now() / 1000) - (ctx.state.phaseAt || 0))
@@ -829,7 +851,7 @@ function render() {
   else if (!amIn() && s.phase === 'lobby') html = vJoin()
   else if (!amIn()) html = vCard(`<p class="mute">${esc(UI.notFound)}</p>`)
   else html = ({
-    lobby: vLobby, prompt: vPrompt, pairing: vPairing, dilemma: vDilemma,
+    lobby: vLobby, prompt: vPrompt, pairing: vPairing, deal: vDeal, dilemma: vDilemma,
     outcome: vOutcome, debrief: vDebrief, scoreboard: vScoreboard,
     finale_intro: vFinaleIntro, finale: vFinale, final: vFinal,
   }[s.phase] || (() => ''))()
@@ -1045,6 +1067,27 @@ function vPairing() {
   `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
 }
 
+// The deal: the pair is named, the room talks out loud, and the app just
+// holds the window open and counts it down. The 🤝 is a public, non-binding
+// promise — the outcome remembers whether it was kept.
+function vDeal() {
+  const s = ctx.state
+  const other = counterpart()
+  const left = timerLeft(DEAL_SECS)
+  if (!other) return vCard(`<p class="mute">${esc(UI.dilemmaSit)}</p>`, 'center') +
+    hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+  return vCard(`
+    <p class="kicker">${roundKicker()}</p>
+    <h2>${esc(fill(UI.dealTitle, { name: nameOf(other) }))}</h2>
+    <p class="mute">${esc(UI.dealHint)}</p>
+    <div class="timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>
+    ${s.promises[ctx.pub]
+      ? `<p class="locked">${esc(UI.dealPromised)}</p>`
+      : btn(UI.dealPromise, 'promise', '', 'btn ghost')}
+    ${s.promises[other] ? `<p class="quip">${esc(fill(UI.dealTheirPromise, { name: nameOf(other) }))}</p>` : ''}
+  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+}
+
 function vDilemma() {
   const s = ctx.state
   const other = counterpart()
@@ -1055,7 +1098,9 @@ function vDilemma() {
   return vCard(`
     <p class="kicker">${roundKicker()}</p>
     <h2>${esc(fill(UI.dilemmaVs, { name: nameOf(other) }))}</h2>
-    <p class="mute">${esc(fill(UI.dilemmaStakes, { name: nameOf(other) }))}</p>
+    <p class="stakes">${esc(fill(UI.dilemmaStakes, { name: nameOf(other) }))}</p>
+    ${s.promises[other] ? `<p class="quip">${esc(fill(UI.dealTheirPromise, { name: nameOf(other) }))}</p>` : ''}
+    ${s.promises[ctx.pub] ? `<p class="mute small">${esc(UI.dealPromised)}</p>` : ''}
     ${coach(UI.coachDilemma)}
     ${committed ? `<p class="locked">🔒 ${esc(fill(UI.dilemmaLockedIn, { name: nameOf(other) }))}</p>` : `
       <div class="timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>
@@ -1063,7 +1108,8 @@ function vDilemma() {
         <button class="btn choice share" data-act="choose" data-choice="SHARE">${esc(UI.dilemmaShare)}</button>
         <button class="btn choice hold" data-act="choose" data-choice="HOLD">${esc(UI.dilemmaHold)}</button>
       </div>
-      <p class="mute small">${esc(UI.dilemmaCheat)}</p>`}
+      <details class="cheat"><summary class="mute small">${esc(UI.dilemmaMath)}</summary>
+        <p class="mute small">${esc(UI.dilemmaCheat)}</p></details>`}
   `, 'center') + hostBar(btn(UI.hostForce, 'host', 'data-t="force"', 'btn ghost'))
 }
 
@@ -1095,8 +1141,11 @@ function vOutcome() {
       btn(fill(UI.readSecret, { name: nameOf(from) }), 'flip', '', 'btn hot')
     if (!text) refreshCollected()
   } else if (iGaveForNothing) sub = `<p class="mute">${esc(UI.nothingReceived)}</p>`
+  const brokenWord = (o.broken || [])
+    .map(p => `<p class="hot-text">${esc(fill(UI.promiseBroken, { name: nameOf(p) }))}</p>`).join('')
   return vCard(`
     <h2 class="${o.kind === 'betrayal' ? 'hot-text' : ''}">${esc(headline)}</h2>
+    ${brokenWord}
     <p class="quip">${esc(o.quip)}</p>
     ${sub}
     ${coach(UI.coachOutcome)}

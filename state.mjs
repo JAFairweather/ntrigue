@@ -11,12 +11,17 @@
 
 import { sha256, bytesToHex } from './vendor/nostr-tools.js'
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
-export const PHASES = ['lobby', 'prompt', 'pairing', 'dilemma', 'outcome', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
+export const PHASES = ['lobby', 'prompt', 'pairing', 'deal', 'dilemma', 'outcome', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
 export const ROUNDS = 4
 // Round 0 is the optional warm-up: the full answer→match→choose→outcome loop
 // with a mild prompt, everything visibly scored — then wiped at the debrief.
+
+// The deal: a timed table-talk window between pairing and the dilemma. The
+// pair is named, the room talks out loud, and either player may flash a
+// non-binding "I'll share" promise — public, and remembered if broken.
+export const DEAL_SECS = 25
 
 export const PAYOFF = { trade: 3, betrayWin: 5, betrayLose: 1, hold: 1 }
 export const FINALE = { extortPrice: 3, revealBonus: 2, burnBonus: 1, vaultBonus: 2 }
@@ -71,6 +76,7 @@ export function initialState({ gid, host, relays }) {
     draws: 0,                   // rng counter, keeps draws deterministic
     pairs: [],                  // [[pubA, pubB], ...]; unpaired pub sits out
     answered: {},               // pub -> true      (this round)
+    promises: {},               // pub -> true — non-binding "I'll share" (this round)
     commits: {},                // pub -> sha256 hex (this round)
     choices: {},                // pub -> 'SHARE'|'HOLD' (verified, this round)
     outcomes: [],               // this round's pair outcomes (see resolveRound)
@@ -234,7 +240,7 @@ function drawPrompt(state, content) {
 function startRound(state, content, round) {
   Object.assign(state, {
     phase: 'prompt', round, promptId: null, redrawsLeft: 1,
-    pairs: [], answered: {}, commits: {}, choices: {}, outcomes: [], outcomeStep: 0,
+    pairs: [], answered: {}, promises: {}, commits: {}, choices: {}, outcomes: [], outcomeStep: 0,
   })
   drawPrompt(state, content)
   state.quip = ''
@@ -254,6 +260,10 @@ function resolveRound(state, content) {
     const [ca, cb] = [state.choices[a], state.choices[b]]
     const seedStr = `${state.gid}:${state.round}:${i}`
     const names = { a: nameOf(state, a), b: nameOf(state, b) }
+    // a deal-window promise followed by a HOLD is public knowledge — the
+    // outcome carries who broke their word so every screen can land the knife
+    const broken = [[a, ca], [b, cb]].filter(([p, c]) => state.promises[p] && c === 'HOLD').map(([p]) => p)
+    const brk = broken.length ? { broken } : {}
     const add = (pub, n) => { state.scores[pub] = (state.scores[pub] || 0) + n }
     const collect = (holder, owner) => {
       (state.collected[holder] = state.collected[holder] || []).push({ owner, round: state.round })
@@ -272,7 +282,7 @@ function resolveRound(state, content) {
     }
     if (ca === 'HOLD' && cb === 'HOLD') {
       add(a, PAYOFF.hold); add(b, PAYOFF.hold)
-      return { a, b, ca, cb, kind: 'stalemate', quip: quip(content, 'mutual_hold', names, seedStr) }
+      return { a, b, ca, cb, kind: 'stalemate', ...brk, quip: quip(content, 'mutual_hold', names, seedStr) }
     }
     const [winner, loser] = ca === 'HOLD' ? [a, b] : [b, a]   // holder wins
     add(winner, PAYOFF.betrayWin); add(loser, PAYOFF.betrayLose)
@@ -280,7 +290,7 @@ function resolveRound(state, content) {
     state.suffered[loser] = (state.suffered[loser] || 0) + 1
     collect(winner, loser)
     return {
-      a, b, ca, cb, kind: 'betrayal', winner, loser,
+      a, b, ca, cb, kind: 'betrayal', winner, loser, ...brk,
       quip: quip(content, 'betrayal',
         { winner: nameOf(state, winner), loser: nameOf(state, loser) }, seedStr),
     }
@@ -389,6 +399,12 @@ export function reduce(prev, act, content) {
       drawPrompt(state, content)
       return state
 
+    case 'promise': {                                  // deal window: "I'll share 🤝"
+      if (state.phase !== 'deal' || act.round !== state.round) return prev
+      if (!activePubs(state).includes(act.pub) || state.promises[act.pub]) return prev
+      state.promises[act.pub] = true
+      return state
+    }
     case 'commit': {
       if (state.phase !== 'dilemma' || act.round !== state.round) return prev
       if (!activePubs(state).includes(act.pub) || state.commits[act.pub]) return prev
@@ -483,7 +499,8 @@ export function reduce(prev, act, content) {
 
     case 'advance':                                    // host: next card
       switch (state.phase) {
-        case 'pairing': state.phase = 'dilemma'; return state
+        case 'pairing': state.phase = 'deal'; return state
+        case 'deal': state.phase = 'dilemma'; return state
         case 'outcome':
           if (state.outcomeStep + 1 < state.outcomes.length) { state.outcomeStep++; return state }
           if (state.round === 0) { state.phase = 'debrief'; state.quip = ''; return state }

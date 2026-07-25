@@ -140,6 +140,10 @@ input:focus, textarea:focus { border-color: var(--gold); }
 .timer.hot-t { color: var(--hot); animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .45; } }
 
+.stakes { font-size: 1.1rem; line-height: 1.4; }
+.cheat summary { cursor: pointer; list-style: none; text-decoration: underline dotted; }
+.cheat summary::-webkit-details-marker { display: none; }
+
 .choices { display: flex; gap: 12px; width: 100%; }
 .choice { font-size: 1.4rem; letter-spacing: .1em; min-height: 92px; }
 .choice.share { background: linear-gradient(160deg, var(--hot), var(--hot-dim)); border-color: transparent; color: #fff; }
