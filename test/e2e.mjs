@@ -165,6 +165,10 @@ for (let r = 1; r <= 4; r++) {
   await see(james, r === 3 ? 'took' : 'traded')
   await see(tv, r === 3 ? 'gave nothing back' : 'traded')
   if (r === 3) await see(tv, 'promised to share')    // the broken 🤝 is called out
+  if (r === 3) {                                     // the room gasps; the TV feels it
+    await tap(sarah, '😱')
+    await see(tv, '😱×1')
+  }
   if (r === 1) {
     await tap(james, 'Read Priya’s secret')          // R1 pairs James ⇄ Priya
     await see(james, 'FOR YOUR EYES ONLY')

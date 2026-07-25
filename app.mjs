@@ -12,7 +12,7 @@ import {
 } from './vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
-import { initialState, reduce, commitHash, flavorRounds, heatFor, multFor, unspentOf, PAYOFF, SCHEMA_VERSION, STAGE_STALE_SECS, DEAL_SECS } from './state.mjs'
+import { initialState, reduce, commitHash, flavorRounds, heatFor, multFor, unspentOf, PAYOFF, REACTIONS, reactionBeat, SCHEMA_VERSION, STAGE_STALE_SECS, DEAL_SECS } from './state.mjs'
 import { UI, MC_UI, BOT, fill, storyLine, AWARD_TITLES } from './copy.mjs'
 import { mcEnabled, mcMode, mcSettings, saveMcSettings, siteConfig, generateDeck, liveQuip, closingRoast } from './mc.mjs'
 
@@ -276,7 +276,7 @@ async function send(dSuffix, payload) {
   catch (e) { console.error('send failed', e) }
 }
 
-// ---------------------------------------------------------------- reactions
+// ---------------------------------------------------------------- state-change effects
 
 function onStateChanged() {
   autoEffects().catch(console.error)
@@ -538,6 +538,16 @@ async function botAct(bot) {
     }
   }
 
+  // the room's gasp: bots react to reveal beats so solo nights feel alive
+  if (['outcome', 'table_read', 'finale'].includes(s.phase)) {
+    const k = `rx:${reactionBeat(s)}:${pub}`
+    if (claim(k)) setTimeout(() => {
+      if (Math.random() < 0.5) hostApply({
+        type: 'react', emoji: REACTIONS[Math.floor(Math.random() * REACTIONS.length)], pub,
+      }).catch((e) => { unclaim(k); console.error('bot react failed', e) })
+    }, botDelay())
+  }
+
   // the deal window: bots sometimes flash the (non-binding) promise — and
   // being bots, they feel no obligation to keep it
   if (s.phase === 'deal' && s.pairs.flat().includes(pub) && !s.promises[pub]) {
@@ -709,6 +719,8 @@ async function onTap(ev) {
     render()
     return deliverAnswer().catch(console.error)
   }
+  if (act === 'react')
+    return send(`rx:${now()}:${ctx.pub}`, { type: 'react', emoji: el.dataset.e })
   if (act === 'promise')
     return send(`prm:${s.round}:${ctx.pub}`, { type: 'promise', round: s.round })
   if (act === 'choose') {
@@ -1240,6 +1252,15 @@ function vDilemma() {
   `, 'center') + hostBar(btn(UI.hostForce, 'host', 'data-t="force"', 'btn ghost'))
 }
 
+// the reaction rail: one-tap emoji during a reveal beat; counts are the
+// room's, keyed to this exact card
+function vReactRail() {
+  const s = ctx.state
+  const counts = s.reactions?.key === reactionBeat(s) ? s.reactions.counts : {}
+  return `<div class="react-rail">${REACTIONS.map(e =>
+    `<button class="react" data-act="react" data-e="${e}">${e}${counts[e] ? `<span class="rc">${counts[e]}</span>` : ''}</button>`).join('')}</div>`
+}
+
 function vOutcome() {
   const s = ctx.state
   const o = s.outcomes[s.outcomeStep]
@@ -1276,6 +1297,7 @@ function vOutcome() {
     <p class="quip">${esc(o.quip)}</p>
     ${sub}
     ${coach(UI.coachOutcome)}
+    ${vReactRail()}
   `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
 }
 
@@ -1295,6 +1317,7 @@ function vTableRead() {
     <h2>${esc(fill(UI.bowlReveal, { name: nameOf(tr.by) }))}</h2>
     <p class="mute small">${esc(fill(UI.bowlPaid, { name: nameOf(tr.by) }))}</p>
     <p class="quip">${esc(s.quip)}</p>
+    ${vReactRail()}
   `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
   const mineToGuess = tr.by !== ctx.pub && !tr.guesses[ctx.pub]
   const waiting = seated().filter(p => p.pub !== tr.by && !tr.guesses[p.pub]).map(p => p.name)
@@ -1439,6 +1462,7 @@ function vFinale() {
   return vCard(`
     <p class="quip big-quip">${esc(s.quip)}</p>
     ${body}
+    ${vReactRail()}
   `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
 }
 

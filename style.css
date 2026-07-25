@@ -245,3 +245,18 @@ input:focus, textarea:focus { border-color: var(--gold); }
   color: var(--hot); font-size: .85rem;
   animation: pulse 2s infinite;
 }
+
+/* the reaction rail: one-tap emoji on reveal beats */
+.react-rail { display: flex; gap: 10px; justify-content: center; }
+.react {
+  font-size: 1.5rem; background: transparent; cursor: pointer;
+  border: 1px solid var(--edge); border-radius: 999px; padding: 8px 14px;
+  position: relative; transition: transform .06s;
+}
+.react:active { transform: scale(1.2); }
+.react .rc {
+  position: absolute; top: -6px; right: -4px;
+  font-size: .7rem; color: var(--gold);
+  background: var(--felt); border: 1px solid var(--edge);
+  border-radius: 999px; padding: 1px 5px;
+}

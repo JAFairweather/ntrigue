@@ -11,7 +11,7 @@
 
 import { sha256, bytesToHex } from './vendor/nostr-tools.js'
 
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 export const PHASES = ['lobby', 'prompt', 'pairing', 'deal', 'dilemma', 'outcome', 'table_read', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
 export const ROUNDS = 4
@@ -29,6 +29,15 @@ export const PAYOFF = { trade: 3, betrayWin: 5, betrayLose: 1, hold: 1 }
 export const ROUND_MULT = { 0: 1, 1: 1, 2: 1, 3: 2, 4: 3 }
 export const multFor = (round) => ROUND_MULT[round] ?? 1
 export const FINALE = { extortPrice: 3, revealBonus: 2, burnBonus: 1, vaultBonus: 2 }
+// Reactions: one-tap emoji during the reveal beats, ephemeral by
+// construction — counts are keyed to the beat they reacted to, so a new
+// card starts a clean slate without any transition bookkeeping.
+export const REACTIONS = ['😱', '😂', '🐍', '🔥']
+export const reactionBeat = (state) => [state.phase, state.round, state.outcomeStep,
+  state.finale?.turn, state.finale?.step,
+  state.finale && Object.values(state.finale.moves).reduce((a, b) => a + b, 0),
+  state.tableRead?.revealed].join(':')
+
 // The bowl: courage, paid. Anyone can drop a copy of their confession in the
 // bowl at write time; after the round's outcomes one entry is drawn and read
 // to the room, the table guesses the author, and boldness collects. Only the
@@ -115,6 +124,7 @@ export function initialState({ gid, host, relays }) {
     story: [],                  // the night's beats, by name — feeds the recap + awards
     quip: '',                   // current card's host line
     callback: '',               // the MC's memory — a named beat from earlier tonight
+    reactions: null,            // {key, counts} — the room's live reaction to this beat
     ending: null,               // {villain, sucker, vd, sn}
   }
 }
@@ -570,6 +580,17 @@ export function reduce(prev, act, content) {
       tr.guesses[act.pub] = act.owner
       if (state.players.every(p => p.pub === tr.by || tr.guesses[p.pub]))
         revealTableRead(state, content)
+      return state
+    }
+    case 'react': {                                    // the room's gasp, amplified
+      if (!['outcome', 'table_read', 'finale'].includes(state.phase)) return prev
+      if (!state.players.some(p => p.pub === act.pub)) return prev
+      if (!REACTIONS.includes(act.emoji)) return prev
+      const key = reactionBeat(state)
+      if (state.reactions?.key !== key) state.reactions = { key, counts: {} }
+      const total = Object.values(state.reactions.counts).reduce((a, b) => a + b, 0)
+      if (total >= 60) return prev                     // a bounded gasp
+      state.reactions.counts[act.emoji] = (state.reactions.counts[act.emoji] || 0) + 1
       return state
     }
     case 'promise': {                                  // deal window: "I'll share 🤝"

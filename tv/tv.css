@@ -143,3 +143,15 @@ body.tv { overflow: hidden; }
   color: var(--mute); opacity: .65;
 }
 .tv-leave:hover { opacity: 1; border-color: var(--gold); color: var(--ink); }
+
+/* reaction bursts: taps float up from the bottom of the stage */
+#fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 20; }
+#fx span {
+  position: absolute; bottom: -8vh; font-size: 6vh;
+  animation: fx-rise 2.6s ease-out forwards;
+}
+@keyframes fx-rise {
+  60% { opacity: 1; }
+  to { transform: translateY(-72vh) rotate(12deg); opacity: 0; }
+}
+.tv-tally { font-size: 3.2vh; letter-spacing: .3vh; opacity: .9; }

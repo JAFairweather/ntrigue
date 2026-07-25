@@ -168,6 +168,9 @@ export class Engine {
       { type: 'whodunit', round: this.state.round, owner: ownerPub })
   }
 
+  /** React to the current reveal beat (😱 😂 🐍 🔥). */
+  react(emoji) { return this.#send(`rx:${now()}:${this.pub}`, { type: 'react', emoji }) }
+
   /** Finale: vault | {kind: 'burn'|'extort', owner, round}. */
   finaleMove(kind, target = {}) {
     const f = this.state.finale
