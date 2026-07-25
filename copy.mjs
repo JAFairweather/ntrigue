@@ -191,6 +191,7 @@ export const UI = {
   soundOff: 'TV sound: off',
 
   netCheckWarn: 'Heads up: this table’s connection looks one-way from here. If friends can’t join, start a new game on different table settings (add #r=… to the address).',
+  reconnecting: '📡 Rough air — the last card is still reaching the table. It keeps trying on its own.',
 
   aiSetup: 'AI host…',
   aiOn: 'AI host: on',

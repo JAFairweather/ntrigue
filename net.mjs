@@ -20,15 +20,29 @@ export class Net {
   }
 
   /** Publish to all relays; resolve when at least one ACKs. Silent relays
-   *  count as rejections (8s race), not hangs. */
-  async publish(event) {
-    const timeout = () => new Promise((_, rej) =>
-      setTimeout(() => rej(new Error('timeout')), 8000))
-    const results = await Promise.allSettled(
-      this.pool.publish(this.urls, event).map(p => Promise.race([p, timeout()])))
-    const acks = results.filter(r => r.status === 'fulfilled').length
-    if (acks === 0) throw new Error(`no relay accepted kind ${event.kind}`)
-    return { acks, of: this.urls.length }
+   *  count as rejections (ack-timeout race), not hangs. A transient 0-ACK
+   *  beat gets bounded retries with backoff before failing — one bad moment
+   *  must never strand the game state (it did, on a live table: issue #25).
+   *  Failures carry per-relay detail so the next one is diagnosable. */
+  async publish(event, { retries = 2, ackTimeout = 8000 } = {}) {
+    let detail = []
+    for (let attempt = 0; ; attempt++) {
+      const timeout = () => new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('timeout')), ackTimeout))
+      const results = await Promise.allSettled(
+        this.pool.publish(this.urls, event).map(p => Promise.race([p, timeout()])))
+      detail = results.map((r, i) =>
+        `${this.urls[i]}: ${r.status === 'fulfilled' ? 'ok' : r.reason?.message || r.reason}`)
+      const acks = results.filter(r => r.status === 'fulfilled').length
+      if (acks > 0) return { acks, of: this.urls.length, detail }
+      if (attempt >= retries) break
+      console.warn(`publish kind ${event.kind}: 0 acks, retrying —`, detail.join(' · '))
+      await new Promise(r => setTimeout(r, 500 * 2 ** attempt))
+    }
+    console.error(`publish kind ${event.kind}: gave up —`, detail.join(' · '))
+    const err = new Error(`no relay accepted kind ${event.kind}`)
+    err.detail = detail
+    throw err
   }
 
   async query(filter) {
@@ -39,11 +53,16 @@ export class Net {
       .sort((a, b) => b.created_at - a.created_at)
   }
 
-  /** Live subscription across all relays; returns a closer. */
+  /** Live subscription across all relays; returns a closer. This bundle's
+   *  subscribeMany takes ONE filter — handing it an array wraps the whole
+   *  array into the REQ as a single "filter", which strict relays reject
+   *  ("provided filter is not an object" — primal, live) and lenient ones
+   *  degrade to match-everything. subscribeMap builds the per-relay
+   *  multi-filter REQ correctly. */
   subscribe(filters, onevent) {
-    const sub = this.pool.subscribeMany(this.urls, filters, {
-      onevent: (e) => { try { onevent(e) } catch (err) { console.error(err) } },
-    })
+    const sub = this.pool.subscribeMap(
+      this.urls.flatMap(url => filters.map(filter => ({ url, filter }))),
+      { onevent: (e) => { try { onevent(e) } catch (err) { console.error(err) } } })
     return () => sub.close()
   }
 

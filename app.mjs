@@ -227,9 +227,16 @@ async function publishState() {
   // dSuffix 'state' yields exactly dState(gid); parseAction ignores it, so
   // the host never re-ingests its own state as an action. The `c` tag makes
   // the game findable by its 4-letter room code (TV + code join).
+  // A push nobody accepted must not stall silently: flag it, show the chip,
+  // and let the tick loop keep re-sending (replacement, never duplication —
+  // same d tag, strictly increasing created_at) until a relay confirms.
   try {
     await sendAction(ctx.net, ctx.sk, ctx.gid, 'state', ctx.state, [codeTag(ctx.state.code)])
-  } catch (e) { console.error('state push failed', e) }
+    if (ctx.ui.netStall) { ctx.ui.netStall = false; render() }
+  } catch (e) {
+    console.error('state push failed', e.detail || e)
+    if (!ctx.ui.netStall) { ctx.ui.netStall = true; render() }
+  }
 }
 
 // One-shot connection self-check after game creation: publish went through,
@@ -864,6 +871,8 @@ function tick() {
   }
   // pull what push should have brought — survives dead sockets after sleep
   if (tickN % 8 === 0) pollNet().catch(console.error)
+  // an unconfirmed state push keeps re-sending until a relay takes it
+  if (ctx.isHost && ctx.ui.netStall && tickN % 4 === 2) publishState().catch(console.error)
   const s = ctx.state
   if (!s) return
   if (s.phase === 'deal' || s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort'))
@@ -915,7 +924,9 @@ function render() {
   }[s.phase] || (() => ''))()
   const stageChip = s?.stage && amIn()
     ? `<div class="stage-chip">${esc(fill(UI.tvCodeChip, { code: s.code }))}</div>` : ''
-  app.innerHTML = html + stageChip + (ctx.gid && s ? vSheetButton() : '') +
+  const stallChip = ctx.ui.netStall
+    ? `<div class="stall-chip">${esc(UI.reconnecting)}</div>` : ''
+  app.innerHTML = html + stageChip + stallChip + (ctx.gid && s ? vSheetButton() : '') +
     (ctx.sheet ? vSheet() : '') + (ctx.ui.mcOpen ? vMcModal() : '')
   for (const [id, k] of Object.entries(keep)) {
     const el = document.getElementById(id)
