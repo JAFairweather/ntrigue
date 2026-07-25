@@ -99,8 +99,11 @@ for (const name of NAMES) {
 await see(james, 'matchups')
 await see(james, 'Your match this round: Priya')     // the explicit who-am-I-against line
 await tap(james, 'Next')
+await see(james, 'Talk it out')                      // the deal: table-talk before choices
+await see(tv, 'Talk it out')
+await tap(james, 'Next')
 for (const name of NAMES) {
-  await see(pages[name], 'Your choice')              // payoff cheat right on the choice screen
+  await see(pages[name], 'Do you trust')             // the choice leads with the person
   await tap(pages[name], 'SHARE')
 }
 await see(james, 'traded')
@@ -119,14 +122,24 @@ for (let r = 1; r <= 4; r++) {
   }
   await see(james, 'matchups')
   await tap(james, 'Next')
+  await see(james, 'Talk it out')                    // the deal window opens every round
+  if (r === 3) {                                     // Marco makes a promise he won't keep
+    await tap(marco, 'I’ll share')
+    await see(marco, 'You told the table')
+    await see(james, 'Marco says they’ll share')     // his match hears the promise
+    await see(tv, '🤝')                              // and so does the room
+  }
+  await tap(james, 'Next')
   for (const name of NAMES) {
     const betray = r === 3 && name === 'Marco'
+    await see(pages[name], 'Do you trust')
     await tap(pages[name], betray ? 'HOLD' : 'SHARE')
   }
   // outcome cards (the drama beat lives on the stage now); James reads a
   // received secret privately in R1 while the TV shows only the headline
   await see(james, r === 3 ? 'took' : 'traded')
   await see(tv, r === 3 ? 'gave nothing back' : 'traded')
+  if (r === 3) await see(tv, 'promised to share')    // the broken 🤝 is called out
   if (r === 1) {
     await tap(james, 'Read Priya’s secret')          // R1 pairs James ⇄ Priya
     await see(james, 'FOR YOUR EYES ONLY')

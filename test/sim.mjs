@@ -79,6 +79,8 @@ apply({ type: 'start', pub: sarah.pub }, false)                      // only hos
   assert.equal(s.phase, 'pairing')
   assert.deepEqual(s.pairs, pairingsFor(s.players, 1), 'warm-up uses round 1 pattern')
   step({ type: 'advance', pub: james.pub })
+  assert.equal(s.phase, 'deal', 'the table-talk window opens before the dilemma, warm-up included')
+  step({ type: 'advance', pub: james.pub })
   const wchoice = { [james.pub]: 'SHARE', [priya.pub]: 'HOLD', [sarah.pub]: 'SHARE', [marco.pub]: 'SHARE' }
   for (const p of P) step({ type: 'commit', pub: p.pub, round: 0, hash: commitHash(wchoice[p.pub], 'n0') })
   for (const p of P) step({ type: 'reveal', pub: p.pub, round: 0, choice: wchoice[p.pub], nonce: 'n0' })
@@ -167,7 +169,20 @@ for (let r = 1; r <= 4; r++) {
   assert.equal(state.phase, 'pairing', 'auto-advance when all answered')
   assert.ok(state.quip.length > 0)
   host('advance')
+  assert.equal(state.phase, 'deal', 'a table-talk window opens between pairing and the dilemma')
+
+  // the deal window: commits are impossible, promises are public and one-shot
+  if (r === 1) {
+    apply({ type: 'commit', pub: james.pub, round: r, hash: commitHash('SHARE', 'early') }, false)
+    apply({ type: 'promise', pub: priya.pub, round: r })         // R1: Priya promises… then holds
+    apply({ type: 'promise', pub: sarah.pub, round: r })         // Sarah promises and keeps it
+    apply({ type: 'promise', pub: priya.pub, round: r }, false)  // one promise per player
+    apply({ type: 'promise', pub: stagePub, round: r }, false)   // spectators can't promise
+    assert.deepEqual(Object.keys(state.promises).sort(), [priya.pub, sarah.pub].sort())
+  }
+  host('advance')
   assert.equal(state.phase, 'dilemma')
+  apply({ type: 'promise', pub: marco.pub, round: r }, false)    // window's closed
 
   // commit, then reveal — with one cheat attempt
   const nonces = {}
@@ -180,6 +195,11 @@ for (let r = 1; r <= 4; r++) {
   for (const p of P)
     apply({ type: 'reveal', pub: p.pub, round: r, choice: script[r][p.pub], nonce: nonces[p.pub] })
   assert.equal(state.phase, 'outcome', 'auto-resolve when all revealed')
+  if (r === 1) {
+    assert.deepEqual(state.outcomes[0].broken, [priya.pub], 'a promise followed by a HOLD is called out')
+    assert.equal(state.outcomes[1].broken, undefined, 'a kept promise passes without comment')
+  }
+  if (r === 2) assert.deepEqual(state.promises, {}, 'promises reset each round')
 
   // sharers deliver: real gift-wrapped grants to counterparts
   for (const [a, b] of state.pairs) {
