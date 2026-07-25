@@ -11,7 +11,7 @@
 
 import { sha256, bytesToHex } from './vendor/nostr-tools.js'
 
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 export const PHASES = ['lobby', 'prompt', 'pairing', 'deal', 'dilemma', 'outcome', 'table_read', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
 export const ROUNDS = 4
@@ -90,6 +90,7 @@ export function initialState({ gid, host, relays }) {
     practice: false,            // true during the warm-up round (round 0)
     flavor: 'mild',             // deck heat, picked by the host at start
     heatBump: 0,                // "turn it up" votes — shifts remaining rounds hotter
+    groupShape: 'friends',      // who's at the table — couples opt in to partner rounds
     players: [],                // [{pub, name, seat}] — seat assigned at start
     promptId: null,
     promptText: null,           // the drawn prompt's text — carries generated
@@ -140,24 +141,15 @@ export function quip(content, key, slots = {}, seedStr = '') {
 
 // ------------------------------------------------------------ pairing
 
-// Seats are 1-indexed. Couples are (1,2) and (3,4) per the spec's lobby order.
-// 4 players: R1 cross-couple, R2 partners, R3 the other cross, R4 repeats R2
-// (the money round). Other counts use a circle-method round-robin with the
-// partners round forced when the count is even.
-export function pairingsFor(players, round) {
+// Seats are 1-indexed. The lobby asks the group's shape: a COUPLES table
+// keeps the spec's schedule (couples sit 1+2, 3+4; rounds 2 & 4 are the
+// couples rounds — R4 the money rematch), while a FRIENDS table gets a
+// neutral rotation with no partner semantics at all: three distinct
+// matchup rounds, then R4 replays the opening as the rematch.
+export const GROUP_SHAPES = ['friends', 'couples']
+export function pairingsFor(players, round, shape = 'couples') {
   const seats = [...players].sort((a, b) => a.seat - b.seat).map(p => p.pub)
   const n = seats.length
-  if (n === 4) {
-    const [p1, p2, p3, p4] = seats
-    return [
-      [[p1, p3], [p2, p4]],   // R1 cross
-      [[p1, p2], [p3, p4]],   // R2 partners
-      [[p1, p4], [p2, p3]],   // R3 other cross
-      [[p1, p2], [p3, p4]],   // R4 rematch (default: repeat R2)
-    ][round - 1]
-  }
-  const partners = []
-  for (let i = 0; i + 1 < n; i += 2) partners.push([seats[i], seats[i + 1]])
   // circle method; odd counts get a bye (that player sits out the round)
   const ring = n % 2 === 0 ? [...seats] : [...seats, null]
   const m = ring.length
@@ -170,6 +162,19 @@ export function pairingsFor(players, round) {
     }
     return out
   }
+  if (shape === 'friends')
+    return [circleRound(0), circleRound(1 % (m - 1)), circleRound(2 % (m - 1)), circleRound(0)][round - 1]
+  if (n === 4) {
+    const [p1, p2, p3, p4] = seats
+    return [
+      [[p1, p3], [p2, p4]],   // R1 cross
+      [[p1, p2], [p3, p4]],   // R2 partners
+      [[p1, p4], [p2, p3]],   // R3 other cross
+      [[p1, p2], [p3, p4]],   // R4 rematch (default: repeat R2)
+    ][round - 1]
+  }
+  const partners = []
+  for (let i = 0; i + 1 < n; i += 2) partners.push([seats[i], seats[i + 1]])
   const samePairs = (a, b) =>
     JSON.stringify(a.map(p => [...p].sort()).sort()) === JSON.stringify(b.map(p => [...p].sort()).sort())
   if (n % 2 === 0) {
@@ -183,7 +188,8 @@ export function pairingsFor(players, round) {
   return [circleRound(0), circleRound(1), circleRound(2), circleRound(1)][round - 1]
 }
 
-export const partnerRound = (round) => round === 2 || round === 4
+export const partnerRound = (round, shape = 'couples') =>
+  shape === 'couples' && (round === 2 || round === 4)
 
 // ------------------------------------------------------------ helpers
 
@@ -277,9 +283,9 @@ function startRound(state, content, round) {
 
 function toPairing(state, content) {
   state.phase = 'pairing'
-  state.pairs = pairingsFor(state.players, state.round || 1)   // warm-up uses R1's pattern
+  state.pairs = pairingsFor(state.players, state.round || 1, state.groupShape)   // warm-up uses R1's pattern
   const [a, b] = state.pairs[0].map(p => nameOf(state, p))
-  state.quip = quip(content, partnerRound(state.round) ? 'pairing_partner' : 'pairing',
+  state.quip = quip(content, partnerRound(state.round, state.groupShape) ? 'pairing_partner' : 'pairing',
     { a, b }, `${state.gid}:${state.round}`)
 }
 
@@ -478,6 +484,7 @@ export function reduce(prev, act, content) {
     case 'start':
       if (state.phase !== 'lobby' || state.players.length < 3) return prev
       state.flavor = FLAVORS.includes(act.flavor) ? act.flavor : 'mild'
+      state.groupShape = GROUP_SHAPES.includes(act.shape) ? act.shape : 'friends'
       state.bowlOn = act.bowl !== false
       if (act.practice) { state.practice = true; startRound(state, content, 0) }
       else startRound(state, content, 1)
