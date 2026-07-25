@@ -1159,7 +1159,7 @@ function vDilemma() {
         <button class="btn choice share" data-act="choose" data-choice="SHARE">${esc(UI.dilemmaShare)}</button>
         <button class="btn choice hold" data-act="choose" data-choice="HOLD">${esc(UI.dilemmaHold)}</button>
       </div>
-      <details class="cheat"><summary class="mute small">${esc(UI.dilemmaMath)}</summary>
+      <details class="cheat" ${s.round === 0 ? 'open' : ''}><summary class="mute small">${esc(UI.dilemmaMath)}</summary>
         <p class="mute small">${esc(UI.dilemmaCheat)}</p></details>`}
   `, 'center') + hostBar(btn(UI.hostForce, 'host', 'data-t="force"', 'btn ghost'))
 }

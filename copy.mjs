@@ -43,7 +43,7 @@ export const UI = {
   roundLabel: 'Round {n}',
   practiceLabel: 'Warm-up — nothing counts',
   coachPrompt: 'Warm-up: write something mild and true, just to learn the moves.',
-  coachDilemma: 'This choice is the whole game. Look up from the phone, read your friend’s face, and decide what kind of friend you are.',
+  coachDilemma: 'This choice is the whole game. Read your friend’s face, then decide what kind of friend you are. The numbers below are open just this once — in the real rounds they hide behind “How the scoring works.”',
   coachOutcome: 'Watch the points land. In the real rounds, every secret someone collects becomes leverage for the finale.',
   debriefTitle: 'That was the warm-up.',
   debriefBody: 'That’s the whole game: answer, get matched, share or hold, live with it. Four real rounds now — then the blackmail finale, where collected secrets get used.',

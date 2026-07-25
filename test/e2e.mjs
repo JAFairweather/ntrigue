@@ -102,6 +102,7 @@ await tap(james, 'Next')
 await see(james, 'Talk it out')                      // the deal: table-talk before choices
 await see(tv, 'Talk it out')
 await tap(james, 'Next')
+await see(james, 'Cooperate: 3 each')                // warm-up only: the math sits open once
 for (const name of NAMES) {
   await see(pages[name], 'Do you trust')             // the choice leads with the person
   await tap(pages[name], 'SHARE')
@@ -139,6 +140,9 @@ for (let r = 1; r <= 4; r++) {
   for (const name of NAMES) {
     const betray = r === 3 && name === 'Marco'
     await see(pages[name], 'Do you trust')
+    if (r === 1 && name === 'James')                 // real rounds fold the math away again
+      assert.equal(await james.getByText('Cooperate: 3 each').first().isVisible().catch(() => false), false,
+        'scored rounds keep the payoff table behind the tap')
     await tap(pages[name], betray ? 'HOLD' : 'SHARE')
   }
   // outcome cards (the drama beat lives on the stage now); James reads a
