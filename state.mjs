@@ -11,9 +11,9 @@
 
 import { sha256, bytesToHex } from './vendor/nostr-tools.js'
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
-export const PHASES = ['lobby', 'prompt', 'pairing', 'deal', 'dilemma', 'outcome', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
+export const PHASES = ['lobby', 'prompt', 'pairing', 'deal', 'dilemma', 'outcome', 'table_read', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
 export const ROUNDS = 4
 // Round 0 is the optional warm-up: the full answer→match→choose→outcome loop
 // with a mild prompt, everything visibly scored — then wiped at the debrief.
@@ -25,6 +25,12 @@ export const DEAL_SECS = 25
 
 export const PAYOFF = { trade: 3, betrayWin: 5, betrayLose: 1, hold: 1 }
 export const FINALE = { extortPrice: 3, revealBonus: 2, burnBonus: 1, vaultBonus: 2 }
+// The bowl: courage, paid. Anyone can drop a copy of their confession in the
+// bowl at write time; after the round's outcomes one entry is drawn and read
+// to the room, the table guesses the author, and boldness collects. Only the
+// DRAWN author's phone ever surfaces its text — undrawn entries never leave
+// the phone (the game's privacy rule holds: consent, then exposure).
+export const BOWL = { author: 2, guess: 1 }
 
 // Deck flavors: the host picks the night's heat in the lobby. 'mild' is the
 // default — the very-playable first game. Generated (AI) and legacy decks
@@ -76,6 +82,9 @@ export function initialState({ gid, host, relays }) {
     draws: 0,                   // rng counter, keeps draws deterministic
     pairs: [],                  // [[pubA, pubB], ...]; unpaired pub sits out
     answered: {},               // pub -> true      (this round)
+    bowlOn: true,               // host toggle: the table-read beat
+    bowl: {},                   // pub -> true — "read mine to the room" (this round)
+    tableRead: null,            // {by, text, guesses, revealed} — the drawn entry
     promises: {},               // pub -> true — non-binding "I'll share" (this round)
     commits: {},                // pub -> sha256 hex (this round)
     choices: {},                // pub -> 'SHARE'|'HOLD' (verified, this round)
@@ -240,7 +249,8 @@ function drawPrompt(state, content) {
 function startRound(state, content, round) {
   Object.assign(state, {
     phase: 'prompt', round, promptId: null, redrawsLeft: 1,
-    pairs: [], answered: {}, promises: {}, commits: {}, choices: {}, outcomes: [], outcomeStep: 0,
+    pairs: [], answered: {}, bowl: {}, tableRead: null,
+    promises: {}, commits: {}, choices: {}, outcomes: [], outcomeStep: 0,
   })
   drawPrompt(state, content)
   state.quip = ''
@@ -303,6 +313,29 @@ function toScoreboard(state, content) {
   state.phase = 'scoreboard'
   state.quip = quip(content, 'scoreboard', { leader: leader(state).name }, `${state.gid}:${state.round}`)
   evalStyles(state, content)
+}
+
+// The table read: draw one bowl entry (deterministic), then wait for the
+// drawn author's phone to surface its text — the only moment a confession
+// crosses from private to public outside the finale, and only by consent.
+function toTableRead(state, content) {
+  const entries = Object.keys(state.bowl).sort()
+  const by = entries[seed32(`bowl:${state.gid}:${state.round}`) % entries.length]
+  state.phase = 'table_read'
+  state.tableRead = { by, text: null, guesses: {}, revealed: false }
+  state.quip = quip(content, 'table_read_intro', {}, `${state.gid}:${state.round}`)
+}
+
+function revealTableRead(state, content) {
+  const tr = state.tableRead
+  tr.revealed = true
+  state.scores[tr.by] = (state.scores[tr.by] || 0) + BOWL.author
+  let right = 0
+  for (const [g, owner] of Object.entries(tr.guesses))
+    if (owner === tr.by) { right++; state.scores[g] = (state.scores[g] || 0) + BOWL.guess }
+  state.exposed.push({ owner: tr.by, round: state.round, text: tr.text, by: tr.by, how: 'bowl' })
+  state.quip = quip(content, 'table_read_reveal',
+    { author: nameOf(state, tr.by), right: String(right) }, `${state.gid}:${state.round}:tr`)
 }
 
 function startFinale(state) {
@@ -378,6 +411,7 @@ export function reduce(prev, act, content) {
     case 'start':
       if (state.phase !== 'lobby' || state.players.length < 3) return prev
       state.flavor = FLAVORS.includes(act.flavor) ? act.flavor : 'mild'
+      state.bowlOn = act.bowl !== false
       if (act.practice) { state.practice = true; startRound(state, content, 0) }
       else startRound(state, content, 1)
       return state
@@ -399,6 +433,31 @@ export function reduce(prev, act, content) {
       drawPrompt(state, content)
       return state
 
+    case 'bowl': {                                     // "read mine to the room" — opt-in only
+      if (state.phase !== 'prompt' || act.round !== state.round) return prev
+      if (!state.bowlOn || state.round === 0) return prev            // no warm-up bowls
+      if (!state.players.some(p => p.pub === act.pub) || state.bowl[act.pub]) return prev
+      state.bowl[act.pub] = true
+      return state
+    }
+    case 'bowl_text': {                                // the DRAWN author surfaces the words
+      const tr = state.tableRead
+      if (state.phase !== 'table_read' || !tr || tr.text || act.pub !== tr.by) return prev
+      const text = String(act.text || '').slice(0, 300)
+      if (!text) return prev
+      tr.text = text
+      return state
+    }
+    case 'whodunit': {                                 // the table guesses the author
+      const tr = state.tableRead
+      if (state.phase !== 'table_read' || !tr?.text || tr.revealed) return prev
+      if (!state.players.some(p => p.pub === act.pub) || act.pub === tr.by) return prev
+      if (tr.guesses[act.pub] || !state.players.some(p => p.pub === act.owner)) return prev
+      tr.guesses[act.pub] = act.owner
+      if (state.players.every(p => p.pub === tr.by || tr.guesses[p.pub]))
+        revealTableRead(state, content)
+      return state
+    }
     case 'promise': {                                  // deal window: "I'll share 🤝"
       if (state.phase !== 'deal' || act.round !== state.round) return prev
       if (!activePubs(state).includes(act.pub) || state.promises[act.pub]) return prev
@@ -504,6 +563,13 @@ export function reduce(prev, act, content) {
         case 'outcome':
           if (state.outcomeStep + 1 < state.outcomes.length) { state.outcomeStep++; return state }
           if (state.round === 0) { state.phase = 'debrief'; state.quip = ''; return state }
+          if (state.bowlOn && Object.keys(state.bowl).length) toTableRead(state, content)
+          else toScoreboard(state, content)
+          return state
+        case 'table_read':
+          // host skip: force the reveal if the words arrived, or move on if
+          // the drawn phone never surfaced them (asleep — nothing exposed)
+          if (state.tableRead?.text && !state.tableRead.revealed) { revealTableRead(state, content); return state }
           toScoreboard(state, content)
           return state
         case 'debrief':                                // warm-up over: wipe everything it touched

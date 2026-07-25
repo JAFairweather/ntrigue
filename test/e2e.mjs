@@ -114,11 +114,17 @@ await tap(james, 'Next')                             // wipe + round 1
 
 // ---- four rounds; R3 has a betrayal (Marco holds on James), rest trade
 for (let r = 1; r <= 4; r++) {
-  for (const name of NAMES) {
+  // R2: Marco locks first and bowls his confession while the table's still
+  // writing (the last lock auto-advances to pairing, closing the window)
+  for (const name of (r === 2 ? ['Marco', 'James', 'Sarah', 'Priya'] : NAMES)) {
     const page = pages[name]
     await see(page, `Round ${r}`)
     await page.locator('#secret-input').fill(`${name} secret r${r}`, T)
     await tap(page, 'Lock it in')
+    if (r === 2 && name === 'Marco') {
+      await tap(marco, 'Drop a copy in the bowl')
+      await see(marco, 'It’s in the bowl')
+    }
   }
   await see(james, 'matchups')
   await tap(james, 'Next')
@@ -148,7 +154,21 @@ for (let r = 1; r <= 4; r++) {
   }
   if (r === 3) await see(marco, 'gave nothing back') // betrayal announced by name
   await tap(james, 'Next')                           // outcome pair 2
-  await tap(james, 'Next')                           // scoreboard
+  await tap(james, 'Next')                           // scoreboard (R2: table read first)
+  if (r === 2) {
+    // the table read: Marco's is the only bowl entry, so it's drawn; his
+    // phone surfaces the words on its own, the room sees them huge
+    await see(tv, 'FROM THE BOWL')
+    await see(tv, 'Marco secret r2')
+    await see(marco, 'Look innocent')
+    for (const [guesser, wrong] of [[james, 'Sarah'], [sarah, 'Priya'], [priya, 'James']]) {
+      await see(guesser, 'Who wrote it?')
+      await guesser.locator('[data-act="whodunit"]', { hasText: wrong }).click(T)
+    }
+    await see(tv, 'It was Marco')                    // all guesses in → auto-reveal
+    await see(james, 'collects +2 for the nerve')
+    await tap(james, 'Next')
+  }
   await see(james, `Scores after round ${r}`)
   await see(tv, 'The ')                              // style labels on stage standings
   await tap(james, 'Next')
@@ -192,12 +212,14 @@ for (const page of [...all, tv]) {
   await see(page, 'Villain of the night')
 }
 
-// ---- the stage saw everything public and nothing private: the two
-// deliberate reveals appear; the other 14 secrets never touched that screen
+// ---- the stage saw everything public and nothing private: the three
+// deliberate exposures (bowl read, blackmail reveal, burn) appear; the
+// other secrets never touched that screen
 const tvSeen = await tv.evaluate(() => document.body.innerText)
 for (const name of NAMES) for (let r = 1; r <= 4; r++) {
   const text = `${name} secret r${r}`
-  const wasExposed = (name === 'James' && r === 3) || (name === 'Sarah' && r === 2)
+  const wasExposed = (name === 'James' && r === 3) || (name === 'Sarah' && r === 2) ||
+                     (name === 'Marco' && r === 2)
   if (!wasExposed) assert.ok(!tvSeen.includes(text), `stage must never show: ${text}`)
 }
 // and the stage key was never granted anything: no gift wrap addressed to it
@@ -206,10 +228,11 @@ const stagePub = JSON.parse(relay.store.query({ kinds: [30078] })
 assert.ok(stagePub, 'host state records the stage')
 assert.equal(relay.store.query({ kinds: [1059], '#p': [stagePub] }).length, 0,
   'stage key received zero grants in a full game')
-// trades +3; R3 betrayal: Marco +5 / James +1; finale: reveal +2, vaults +2, burn +1
+// trades +3; R3 betrayal: Marco +5 / James +1; Marco's bowl read +2 (all
+// guesses wrong); finale: reveal +2, vaults +2, burn +1
 const score = async (page, name) => Number(await page.locator('.score-row', { hasText: name }).first().locator('.pts').textContent(T))
 assert.equal(await score(james, 'James'), 3 + 3 + 1 + 3 + 2)
-assert.equal(await score(james, 'Marco'), 3 + 3 + 5 + 3 + 1)
+assert.equal(await score(james, 'Marco'), 3 + 3 + 5 + 3 + 1 + 2)
 assert.equal(await score(james, 'Sarah'), 3 * 4 + 2)
 assert.equal(await score(james, 'Priya'), 3 * 4 + 2)
 
@@ -229,12 +252,14 @@ await tv.goto('http://localhost:8899/tv/index.html#r=' + encodeURIComponent('ws:
 await tv.reload()
 await see(tv, 'PUT THE NIGHT ON SCREEN')
 
-// ---- adversarial check on the live room: 14 secrets stayed ciphertext,
-// only the two deliberate reveals (blackmail + burn) are stored readable
+// ---- adversarial check on the live room: the other secrets stayed
+// ciphertext; only the three deliberate exposures (bowl read, blackmail
+// reveal, burn) are stored readable
 const stored = relay.store.events.map(e => e.content).join('\n')
 for (const name of NAMES) for (let r = 1; r <= 4; r++) {
   const text = `${name} secret r${r}`
-  const wasExposed = (name === 'James' && r === 3) || (name === 'Sarah' && r === 2)
+  const wasExposed = (name === 'James' && r === 3) || (name === 'Sarah' && r === 2) ||
+                     (name === 'Marco' && r === 2)
   if (wasExposed) assert.ok(stored.includes(text), `deliberately public: ${text}`)
   else assert.ok(!stored.includes(text), `room must never hold: ${text}`)
 }

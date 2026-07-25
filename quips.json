@@ -95,6 +95,18 @@
       "{villain} collected {vd} 🗡 and zero remorse. {sucker} trusted {sn} times too many. Goodnight!",
       "Raise a glass to {villain} ({vd} 🗡), and pour one out for {sucker} ({sn} betrayals absorbed).",
       "The record shows: {villain} was the knife ({vd} 🗡), {sucker} was the cushion ({sn} betrayals). Drive safe!"
+    ],
+    "table_read_intro": [
+      "The bowl decides. Somebody is about to hear their own words out loud.",
+      "One confession, drawn at random, read to the room. Poker faces, everyone.",
+      "The bowl has spoken. Whoever wrote this — steady now.",
+      "Someone at this table volunteered for this. Respect. And suspicion."
+    ],
+    "table_read_reveal": [
+      "It was {author}. The nerve. The audacity. The +2.",
+      "{author} wrote that and put it in the bowl on purpose. Legend.",
+      "Confirmed: {author}. {right} of you saw right through them.",
+      "{author}, taking a bow. That's how you play a game called NTRIGUE."
     ]
   }
 }

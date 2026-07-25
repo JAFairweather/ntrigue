@@ -381,6 +381,14 @@ async function autoEffectsInner(s) {
         { type: 'reveal', round: s.round, choice: mine.choice, nonce: mine.nonce })
   }
 
+  // drawn from the bowl: surface my confession to the room — the one
+  // consented crossing from private to public outside the finale. Retried
+  // by the tick loop like every other debt; idempotent d tag.
+  if (s.phase === 'table_read' && s.tableRead?.by === me && !s.tableRead.text) {
+    const text = ctx.local.scopes[s.round]?.text
+    if (text) await send(`bwt:${s.round}:${me}`, { type: 'bowl_text', round: s.round, text })
+  }
+
   // if I shared, deliver my secret to my counterpart — the trade itself
   for (const [round, pend] of Object.entries(ctx.local.pending)) {
     const r = Number(round)
@@ -476,6 +484,33 @@ async function botAct(bot) {
         await hostApply({ type: 'answered', round: ctx.state.round, pub })
       } catch (e) { unclaim(k); console.error('bot answer failed', e) }
     }, botDelay())
+  }
+
+  // the bowl: bots have no shame — they drop their line in often enough
+  // that solo nights see the table read
+  if (s.phase === 'prompt' && s.bowlOn && s.round > 0 && s.answered[pub] && !s.bowl[pub]) {
+    const k = `bwl:${s.round}:${pub}`
+    if (claim(k)) setTimeout(() => {
+      if (Math.random() < 0.5) hostApply({ type: 'bowl', round: ctx.state.round, pub })
+        .catch((e) => { unclaim(k); console.error('bot bowl failed', e) })
+    }, botDelay())
+  }
+
+  // drawn from the bowl: the bot surfaces its canned line, then everyone
+  // else guesses a name at random (they are not clever, just brave)
+  if (s.phase === 'table_read' && s.tableRead) {
+    const tr = s.tableRead
+    if (tr.by === pub && !tr.text && data.scopes[s.round]?.text && claim(`bwt:${s.round}:${pub}`))
+      await hostApply({ type: 'bowl_text', round: s.round, text: data.scopes[s.round].text, pub })
+    if (tr.text && !tr.revealed && tr.by !== pub && !tr.guesses[pub]) {
+      const k = `who:${s.round}:${pub}`
+      if (claim(k)) setTimeout(() => {
+        const others = ctx.state.players.filter(p => p.pub !== pub)
+        const owner = others[Math.floor(Math.random() * others.length)].pub
+        hostApply({ type: 'whodunit', round: s.round, owner, pub })
+          .catch((e) => { unclaim(k); console.error('bot guess failed', e) })
+      }, botDelay())
+    }
   }
 
   // the deal window: bots sometimes flash the (non-binding) promise — and
@@ -735,12 +770,23 @@ async function onTap(ev) {
         localStorage.setItem(`ntg:${ctx.gid}:mcdeck`, JSON.stringify(deck))
       }
     }
-    return send(`host:start:${now()}`, { type: 'start', practice: ctx.ui.practice !== false, flavor: ctx.ui.flavor || 'mild' })
+    return send(`host:start:${now()}`, {
+      type: 'start', practice: ctx.ui.practice !== false,
+      flavor: ctx.ui.flavor || 'mild', bowl: ctx.ui.bowl !== false,
+    })
   }
   if (act === 'practice-toggle') {
     ctx.ui.practice = ctx.ui.practice === false
     return render()
   }
+  if (act === 'bowl-toggle') {
+    ctx.ui.bowl = ctx.ui.bowl === false
+    return render()
+  }
+  if (act === 'bowl')
+    return send(`bwl:${s.round}:${ctx.pub}`, { type: 'bowl', round: s.round })
+  if (act === 'whodunit')
+    return send(`who:${s.round}:${ctx.pub}`, { type: 'whodunit', round: s.round, owner: el.dataset.pub })
   if (act === 'flavor') {
     ctx.ui.flavor = el.dataset.v
     return render()
@@ -852,7 +898,7 @@ function render() {
   else if (!amIn()) html = vCard(`<p class="mute">${esc(UI.notFound)}</p>`)
   else html = ({
     lobby: vLobby, prompt: vPrompt, pairing: vPairing, deal: vDeal, dilemma: vDilemma,
-    outcome: vOutcome, debrief: vDebrief, scoreboard: vScoreboard,
+    outcome: vOutcome, table_read: vTableRead, debrief: vDebrief, scoreboard: vScoreboard,
     finale_intro: vFinaleIntro, finale: vFinale, final: vFinal,
   }[s.phase] || (() => ''))()
   const stageChip = s?.stage && amIn()
@@ -974,6 +1020,8 @@ function vLobby() {
         </button>`).join('')}
       ${btn(ctx.ui.practice !== false ? UI.practiceOn : UI.practiceOff, 'practice-toggle', '', 'btn ghost')}
       <p class="mute small">${esc(UI.practiceHint)}</p>
+      ${btn(ctx.ui.bowl !== false ? UI.bowlOn : UI.bowlOff, 'bowl-toggle', '', 'btn ghost')}
+      <p class="mute small">${esc(UI.bowlHint)}</p>
       ${s.players.length >= 3 && !ctx.ui.generating
         ? btn(UI.lobbyStart, 'start-night', '', 'btn hot big')
         : `<p class="mute small">${esc(UI.lobbyNeedPlayers)}</p>`}` : ''}
@@ -1038,6 +1086,9 @@ function vPrompt() {
     ${coach(UI.coachPrompt)}
     ${done ? `
       <p class="locked">🔒 ${esc(UI.promptLocked)}</p>
+      ${s.bowlOn && s.round > 0 ? (s.bowl[ctx.pub]
+        ? `<p class="mute small">${esc(UI.bowlIn)}</p>`
+        : btn(UI.bowlDrop, 'bowl', '', 'btn ghost')) : ''}
       ${s.answered[ctx.pub]
         ? `<p class="mute">${esc(fill(UI.waitingOn, { names: missing.join(', ') || '…' }))}</p>`
         : `<p class="mute small">${esc(UI.delivering)}</p>`}` : `
@@ -1150,6 +1201,37 @@ function vOutcome() {
     ${sub}
     ${coach(UI.coachOutcome)}
   `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+}
+
+// The table read: one bowled confession, read to the room, author hidden
+// until every guess is in (or the host moves it along).
+function vTableRead() {
+  const s = ctx.state
+  const tr = s.tableRead
+  if (!tr.text) return vCard(`
+    <p class="kicker">${esc(UI.bowlKicker)}</p>
+    <div class="dots">…</div>
+    <p class="mute">${esc(UI.bowlFishing)}</p>
+  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn ghost'))
+  if (tr.revealed) return vCard(`
+    <p class="kicker">${esc(UI.bowlKicker)}</p>
+    <p class="secret-text">“${esc(tr.text)}”</p>
+    <h2>${esc(fill(UI.bowlReveal, { name: nameOf(tr.by) }))}</h2>
+    <p class="mute small">${esc(fill(UI.bowlPaid, { name: nameOf(tr.by) }))}</p>
+    <p class="quip">${esc(s.quip)}</p>
+  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+  const mineToGuess = tr.by !== ctx.pub && !tr.guesses[ctx.pub]
+  const waiting = seated().filter(p => p.pub !== tr.by && !tr.guesses[p.pub]).map(p => p.name)
+  return vCard(`
+    <p class="kicker">${esc(UI.bowlKicker)}</p>
+    <p class="secret-text">“${esc(tr.text)}”</p>
+    <h2>${esc(UI.bowlWho)}</h2>
+    ${tr.by === ctx.pub ? `<p class="quip">${esc(UI.bowlYours)}</p>` : ''}
+    ${mineToGuess ? `<div class="stash-list">${seated().filter(p => p.pub !== ctx.pub).map(p =>
+      `<button class="stash" data-act="whodunit" data-pub="${p.pub}">${esc(p.name)}</button>`).join('')}</div>` : ''}
+    ${!mineToGuess && tr.by !== ctx.pub ? `<p class="locked">${esc(UI.bowlGuessed)}</p>` : ''}
+    <p class="mute small">${esc(fill(UI.waitingOn, { names: waiting.join(', ') || '…' }))}</p>
+  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn ghost'))
 }
 
 function vDebrief() {
