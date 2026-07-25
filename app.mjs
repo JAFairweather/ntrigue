@@ -1345,13 +1345,16 @@ function vScoreboard() {
     <ul class="scores">${scoreRows()}</ul>
     <p class="mute small">${esc(UI.daggerLegend)}</p>
     <p class="quip">${esc(s.quip)}</p>
+    ${s.callback ? `<p class="quip small">${esc(s.callback)}</p>` : ''}
   `) + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'), heatUpBtn())
 }
 
 function vFinaleIntro() {
+  const s = ctx.state
   return vCard(`
     <h1 class="logo hot-text">${esc(UI.finaleIntroTitle)}</h1>
     <p>${esc(UI.finaleIntroBody)}</p>
+    ${s.callback ? `<p class="quip">${esc(s.callback)}</p>` : ''}
   `, 'center') + hostBar(btn(UI.finaleIntroStart, 'host', 'data-t="advance"', 'btn hot big'))
 }
 

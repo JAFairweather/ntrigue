@@ -158,6 +158,7 @@ const script = {
   4: { [james.pub]: 'SHARE', [sarah.pub]: 'HOLD', [priya.pub]: 'SHARE', [marco.pub]: 'HOLD' },
 }
 
+let preFinaleFork = null
 const redrawRound = 2                                                 // exercise redraw once
 for (let r = 1; r <= 4; r++) {
   assert.equal(state.phase, 'prompt')
@@ -274,6 +275,14 @@ for (let r = 1; r <= 4; r++) {
   assert.equal(state.phase, 'scoreboard')
   assert.ok(P.every(p => state.styles[p.pub]), 'everyone always has a style label')
   if (r === 1) {
+    // the cold MC remembers: the only named fact so far is Priya's broken
+    // promise, so the scoreboard callback must point at her
+    assert.ok(state.callback.includes('Priya'), `callback names the promise-breaker: "${state.callback}"`)
+    assert.ok(state.callback.includes('1'), 'and the round it happened')
+  }
+  if (r === 4) assert.ok(P.some(p => state.callback.includes(p.name)),
+    `late callbacks still name a player: "${state.callback}"`)
+  if (r === 1) {
     // fork: the table turns it up at the scoreboard — host-only, and the
     // next round draws from the hotter pool
     const hot = reduce(state, { type: 'heat_up', pub: james.pub }, content)
@@ -286,6 +295,7 @@ for (let r = 1; r <= 4; r++) {
       'a bumped night draws the next round from the spicy pool')
   }
   if (r === 3) assert.equal(state.scores[marco.pub], 16, 'round 3 pays double (3+3+5×2)')
+  if (r === 4) preFinaleFork = state                   // for the determinism check below
   host('advance')
 }
 
@@ -306,6 +316,13 @@ assert.equal(state.suffered[james.pub], 3)
 
 // ---- finale: reverse score order, tie → higher seat first
 assert.equal(state.phase, 'finale_intro')
+// the finale intro gets its own callback — deterministic: replaying the same
+// advance narrates the same way
+assert.ok(P.some(p => state.callback.includes(p.name)), `finale intro callback: "${state.callback}"`)
+{
+  const again = reduce(preFinaleFork, { type: 'advance', pub: james.pub }, content)
+  assert.equal(again.callback, state.callback, 'same game, same memory')
+}
 host('advance')
 assert.equal(state.phase, 'finale')
 assert.deepEqual(state.finale.order, [james.pub, priya.pub, sarah.pub, marco.pub])

@@ -11,7 +11,7 @@
 
 import { sha256, bytesToHex } from './vendor/nostr-tools.js'
 
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 export const PHASES = ['lobby', 'prompt', 'pairing', 'deal', 'dilemma', 'outcome', 'table_read', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
 export const ROUNDS = 4
@@ -114,6 +114,7 @@ export function initialState({ gid, host, relays }) {
     exposed: [],                // [{owner, round, text, by, how}] — can't un-tell
     story: [],                  // the night's beats, by name — feeds the recap + awards
     quip: '',                   // current card's host line
+    callback: '',               // the MC's memory — a named beat from earlier tonight
     ending: null,               // {villain, sucker, vd, sn}
   }
 }
@@ -273,6 +274,7 @@ function startRound(state, content, round) {
   })
   drawPrompt(state, content)
   state.quip = ''
+  state.callback = ''
 }
 
 function toPairing(state, content) {
@@ -332,9 +334,44 @@ function resolveRound(state, content) {
   state.outcomeStep = 0
 }
 
+// ---------------------------------------------------------- night callbacks
+// The cold game's memory: between rounds and before the finale, the MC
+// names something that actually happened. Facts come from public state
+// only — the same boundary as the AI MC's inputs — and the pick is
+// seeded, so a given game always narrates the same way.
+export function nightFacts(state) {
+  const byName = {}
+  for (const p of state.players) byName[p.pub] = p.name
+  const top = (m) => Object.entries(m).sort((a, b) => b[1] - a[1])[0]
+  const facts = []
+  const brk = [...state.story].reverse().find(e => e.t === 'promiseBroken')
+  if (brk) facts.push({ k: 'cb_promise', name: brk.name, r: String(brk.r) })
+  const shark = top(state.daggers || {})
+  if (shark && shark[1] >= 2) facts.push({ k: 'cb_shark', name: byName[shark[0]], n: String(shark[1]) })
+  const mark = top(state.suffered || {})
+  if (mark && mark[1] >= 2) facts.push({ k: 'cb_daggered', name: byName[mark[0]], n: String(mark[1]) })
+  const stacks = {}
+  for (const [pub, list] of Object.entries(state.collected || {})) stacks[pub] = list.length
+  const rich = top(stacks)
+  if (rich && rich[1] >= 2) facts.push({ k: 'cb_collector', name: byName[rich[0]], n: String(rich[1]) })
+  if (state.exposed.length) facts.push({ k: 'cb_exposed', n: String(state.exposed.length) })
+  if (!facts.length && state.round >= 2) facts.push({ k: 'cb_quiet' })
+  return facts
+}
+
+function callbackLine(state, content) {
+  const facts = nightFacts(state)
+  const named = facts.filter(f => f.name)          // a callback should point a finger
+  const pool = named.length ? named : facts
+  if (!pool.length) return ''
+  const { k, ...slots } = pool[seed32(`cb:${state.gid}:${state.round}:${state.phase}`) % pool.length]
+  return quip(content, k, slots, `${state.gid}:${state.round}:${state.phase}`)
+}
+
 function toScoreboard(state, content) {
   state.phase = 'scoreboard'
   state.quip = quip(content, 'scoreboard', { leader: leader(state).name }, `${state.gid}:${state.round}`)
+  state.callback = callbackLine(state, content)
   evalStyles(state, content)
 }
 
@@ -665,7 +702,10 @@ export function reduce(prev, act, content) {
           return state
         case 'scoreboard':
           if (state.round < ROUNDS) startRound(state, content, state.round + 1)
-          else state.phase = 'finale_intro'
+          else {
+            state.phase = 'finale_intro'
+            state.callback = callbackLine(state, content)
+          }
           return state
         case 'finale_intro': startFinale(state); return state
         case 'finale':
