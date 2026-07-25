@@ -6,8 +6,8 @@
 
 import { generateSecretKey, getPublicKey, bytesToHex, hexToBytes, qrfactory } from '../vendor/nostr-tools.js'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, findGameByCode } from '../net.mjs'
-import { SCHEMA_VERSION, STAGE_PING_SECS, DEAL_SECS, flavorRounds, heatFor, multFor } from '../state.mjs'
-import { UI, fill } from '../copy.mjs'
+import { SCHEMA_VERSION, STAGE_PING_SECS, DEAL_SECS, flavorRounds, heatFor, multFor, unspentOf } from '../state.mjs'
+import { UI, fill, storyLine, AWARD_TITLES } from '../copy.mjs'
 
 const $ = (sel) => document.querySelector(sel)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
@@ -413,9 +413,11 @@ function vFinale() {
   const s = ctx.state
   const f = s.finale
   const actor = nameOf(f.order[f.turn])
+  const again = (f.moves?.[f.order[f.turn]] || 0) > 0
   if (f.step === 'choose') return card(`
     <p class="tv-kicker">${esc(UI.finaleIntroTitle)}</p>
-    <h1 class="tv-huge">${esc(fill(UI.finaleWatching, { name: actor }))}</h1>
+    <h1 class="tv-huge">${esc(fill(again ? UI.finaleAgain : UI.finaleWatching, { name: actor }))}</h1>
+    <p class="tv-body">${esc(fill(UI.finaleHolds, { name: actor, n: String(unspentOf(s, f.order[f.turn]).length) }))}</p>
     <p class="tv-quip">${esc(s.styles[f.order[f.turn]] || '')}</p>
   `)
   if (f.step === 'extort') {
@@ -430,7 +432,7 @@ function vFinale() {
   if (f.step === 'decide') return card(`
     <h1 class="tv-huge">${esc(fill(UI.decideWaiting, { name: actor }))}</h1>
   `)
-  if (!beat(`f:${f.turn}`)) return card(`<div class="tv-dots">…</div>`)
+  if (!beat(`f:${f.turn}:${f.moves?.[f.order[f.turn]] || 0}`)) return card(`<div class="tv-dots">…</div>`)
   const a = f.action
   let body = ''
   if (a.kind === 'vault' && a.auto) body = `<p class="tv-body">${esc(fill(UI.finaleAutoVault, { name: actor }))}</p>`
@@ -460,11 +462,18 @@ function vFinal() {
       `)
     }
   }
+  // the recap: the night retold as a story beat before the standings land
+  if ((s.story || []).length && !beat('recap', 6000)) return card(`
+    <p class="tv-kicker">${esc(UI.recapTitle)}</p>
+    ${s.story.map(e => `<p class="tv-body">${esc(storyLine(e))}</p>`).join('')}
+  `)
   return card(`
     <h1 class="tv-logo">${esc(UI.finalTitle)}</h1>
     <ul class="tv-scores">${tvScoreRows()}</ul>
     <p class="tv-body"><span class="tv-kicker">${esc(UI.villainAward)}</span> ${esc(s.ending.villain)} ${'🗡'.repeat(s.ending.vd)}
       · <span class="tv-kicker">${esc(UI.suckerAward)}</span> ${esc(s.ending.sucker)}</p>
+    ${(s.ending.awards || []).map(a =>
+      `<p class="tv-mute"><b>${esc(a.name)}</b> · ${esc(AWARD_TITLES[a.k] || a.k)}</p>`).join('')}
     <p class="tv-quip">${esc(s.quip)}</p>
   `)
 }

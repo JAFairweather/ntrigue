@@ -12,8 +12,8 @@ import {
 } from './vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
-import { initialState, reduce, commitHash, flavorRounds, heatFor, multFor, PAYOFF, SCHEMA_VERSION, STAGE_STALE_SECS, DEAL_SECS } from './state.mjs'
-import { UI, MC_UI, BOT, fill } from './copy.mjs'
+import { initialState, reduce, commitHash, flavorRounds, heatFor, multFor, unspentOf, PAYOFF, SCHEMA_VERSION, STAGE_STALE_SECS, DEAL_SECS } from './state.mjs'
+import { UI, MC_UI, BOT, fill, storyLine, AWARD_TITLES } from './copy.mjs'
 import { mcEnabled, mcMode, mcSettings, saveMcSettings, siteConfig, generateDeck, liveQuip, closingRoast } from './mc.mjs'
 
 const $ = (sel) => document.querySelector(sel)
@@ -587,18 +587,20 @@ async function botAct(bot) {
     }
   }
 
-  // the finale: one move, a spine, and no mercy
+  // the finale: keep spending while cards remain, a spine, and no mercy.
+  // Claim keys carry the actor's move count — the same turn number now
+  // repeats across a multi-move hand.
   if (s.phase === 'finale') {
     const f = s.finale
     const actor = f.order[f.turn]
+    const mv = f.moves?.[actor] || 0
     if (f.step === 'choose' && actor === pub) {
-      const k = `fc:${f.turn}:${pub}`
+      const k = `fc:${f.turn}:${mv}:${pub}`
       if (claim(k)) setTimeout(async () => {
         try {
-          const held = ctx.state.collected[pub] || []
-          const pickFrom = held.length ? held : null
-          if (!pickFrom) return    // reducer auto-vaults empty-handed players
-          const target = pickFrom[Math.floor(Math.random() * pickFrom.length)]
+          const held = unspentOf(ctx.state, pub)
+          if (!held.length) return   // reducer auto-vaults empty-handed players
+          const target = held[Math.floor(Math.random() * held.length)]
           const text = data.stash[`${target.owner}:${target.round}`]
           const roll = Math.random()
           if (roll < 0.45)
@@ -611,14 +613,14 @@ async function botAct(bot) {
       }, botDelay())
     }
     if (f.step === 'extort' && f.action?.owner === pub) {
-      const k = `xr:${f.turn}:${pub}`
+      const k = `xr:${f.turn}:${mv}:${pub}`
       if (claim(k)) setTimeout(() => {
         hostApply({ type: 'extort_response', pay: Math.random() < 0.5, turn: f.turn, pub })
           .catch((e) => { unclaim(k); console.error('bot extort response failed', e) })
       }, botDelay())
     }
     if (f.step === 'decide' && actor === pub) {
-      const k = `bd:${f.turn}:${pub}`
+      const k = `bd:${f.turn}:${mv}:${pub}`
       if (claim(k)) setTimeout(() => {
         const text = data.stash[`${f.action.owner}:${f.action.round}`]
         hostApply({ type: 'blackmail_decision', reveal: !!text && Math.random() < 0.6, text: text || '', turn: f.turn, pub })
@@ -692,25 +694,30 @@ async function onTap(ev) {
     ctx.ui.finaleSecret = el.dataset.k          // `${owner}:${round}`
     return render()
   }
+  // finale d-suffixes carry the actor's move count — turns repeat across a
+  // multi-move hand, and each move must be its own idempotent action
   if (act === 'finale-move') {
+    const mv = s.finale.moves?.[ctx.pub] || 0
     const kind = el.dataset.kind
-    if (kind === 'vault') return send(`fin:${ctx.pub}`, { type: 'finale_choice', action: 'vault' })
+    if (kind === 'vault') return send(`fin:${mv}:${ctx.pub}`, { type: 'finale_choice', action: 'vault' })
     const k = ctx.ui.finaleSecret
     if (!k) return
+    ctx.ui.finaleSecret = null                     // a spent card can't stay armed
     const [owner, round] = [k.slice(0, 64), Number(k.slice(65))]
     const payload = { type: 'finale_choice', action: kind, owner, round }
     if (kind === 'burn') payload.text = ctx.local.collected[k] || ''
-    return send(`fin:${ctx.pub}`, payload)
+    return send(`fin:${mv}:${ctx.pub}`, payload)
   }
   if (act === 'extort-response')
-    return send(`exr:${s.finale.turn}:${ctx.pub}`,
+    return send(`exr:${s.finale.turn}:${s.finale.moves?.[s.finale.order[s.finale.turn]] || 0}:${ctx.pub}`,
       { type: 'extort_response', turn: s.finale.turn, pay: el.dataset.pay === '1' })
   if (act === 'decide') {
+    const mv = s.finale.moves?.[ctx.pub] || 0
     const reveal = el.dataset.reveal === '1'
     const a = s.finale.action
     const payload = { type: 'blackmail_decision', turn: s.finale.turn, reveal }
     if (reveal) payload.text = ctx.local.collected[`${a.owner}:${a.round}`] || ''
-    return send(`bmd:${s.finale.turn}:${ctx.pub}`, payload)
+    return send(`bmd:${s.finale.turn}:${mv}:${ctx.pub}`, payload)
   }
   if (act === 'again') { location.hash = ''; location.reload(); return }
   if (act === 'code-join') {
@@ -1320,11 +1327,13 @@ function vFinale() {
   const meActor = actor === ctx.pub
 
   if (f.step === 'choose') {
+    const again = (f.moves?.[actor] || 0) > 0
     if (!meActor) return vCard(`
       <p class="kicker">${esc(UI.finaleIntroTitle)}</p>
-      <h2>${esc(fill(UI.finaleWatching, { name: nameOf(actor) }))}</h2>
+      <h2>${esc(fill(again ? UI.finaleAgain : UI.finaleWatching, { name: nameOf(actor) }))}</h2>
+      <p class="mute small">${esc(fill(UI.finaleHolds, { name: nameOf(actor), n: String(unspentOf(s, actor).length) }))}</p>
       <p class="quip">${esc(s.quip)}</p>`, 'center')
-    const mine = (s.collected[ctx.pub] || [])
+    const mine = unspentOf(s, ctx.pub)
     const items = mine.map(c => {
       const k = `${c.owner}:${c.round}`
       const sel = ctx.ui.finaleSecret === k
@@ -1376,8 +1385,8 @@ function vFinale() {
     return vCard(`<h2>${esc(fill(UI.decideWaiting, { name: nameOf(actor) }))}</h2>`, 'center')
   }
 
-  // result card — with the drama beat
-  const key = `f:${f.turn}`
+  // result card — with the drama beat (keyed per move: turns repeat now)
+  const key = `f:${f.turn}:${f.moves?.[actor] || 0}`
   if (!beat(key)) return vCard(`<div class="dots">…</div>`, 'center')
   const a = f.action
   let body = ''
@@ -1397,6 +1406,7 @@ function vFinale() {
 
 function vFinal() {
   const s = ctx.state
+  const titles = AWARD_TITLES
   return vCard(`
     <h1 class="logo">${esc(UI.finalTitle)}</h1>
     <ul class="scores">${scoreRows()}</ul>
@@ -1404,6 +1414,12 @@ function vFinal() {
       <p><span class="kicker">${esc(UI.villainAward)}</span> ${esc(s.ending.villain)} ${'🗡'.repeat(s.ending.vd)}</p>
       <p><span class="kicker">${esc(UI.suckerAward)}</span> ${esc(s.ending.sucker)}</p>
     </div>
+    ${(s.ending.awards || []).length ? `
+      <p class="kicker">${esc(UI.awardsTitle)}</p>
+      ${s.ending.awards.map(a => `<p class="small"><b>${esc(a.name)}</b> · ${esc(titles[a.k] || a.k)}</p>`).join('')}` : ''}
+    ${(s.story || []).length ? `
+      <p class="kicker">${esc(UI.recapTitle)}</p>
+      ${s.story.map(e => `<p class="small mute">${esc(storyLine(e))}</p>`).join('')}` : ''}
     ${s.roast ? `
       <p class="kicker">${esc(UI.roastTitle)}</p>
       ${s.roast.map(c => `<p class="quip">${esc(c)}</p>`).join('')}` :

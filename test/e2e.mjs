@@ -184,12 +184,13 @@ for (let r = 1; r <= 4; r++) {
 
 // ---- finale, last place first with ×1/×1/×2/×3 stakes: James(17),
 // Priya(21, seat tie-break), Sarah(21), Marco(27, incl. +2 bowl).
-// Covers every finale surface: extort → refuse →
-// public reveal, two vaults, and a burn.
+// Covers every finale surface: extort → refuse → public reveal, vaults,
+// a burn — and the multi-move hand: spenders go again until they vault.
 await see(james, 'BLACKMAIL FINALE')
 await tap(james, 'Begin')
 
-// James extorts Sarah with her round-2 secret; she refuses; he goes public
+// James extorts Sarah with her round-2 secret; she refuses; he goes public —
+// and still holding two more, he comes back around before vaulting out
 await see(james, 'Your move')
 await james.locator('.stash', { hasText: 'round 2' }).click(T)
 await tap(james, 'Extort')
@@ -200,6 +201,10 @@ await tap(james, 'Make it public')
 await see(priya, 'Sarah secret r2')                  // the room hears it
 await see(priya, 'cannot be un-told')
 await tap(james, 'Next')
+await see(sarah, 'isn’t done')                       // the room sees the hand continue
+await see(james, 'Your move')
+await tap(james, 'Vault')
+await tap(james, 'Next')
 
 // Priya and Sarah keep quiet for profit
 for (const mover of [priya, sarah]) {
@@ -208,18 +213,26 @@ for (const mover of [priya, sarah]) {
   await tap(james, 'Next')
 }
 
-// Marco burns what he took from James in round 3
+// Marco burns what he took from James in round 3, then shuts the vault
 await see(marco, 'Your move')
 await marco.locator('.stash', { hasText: 'James' }).click(T)
 await tap(marco, 'Burn')
 await see(sarah, 'James secret r3')
 await tap(james, 'Next')
+await see(marco, 'Your move')
+await tap(marco, 'Vault')
+await tap(james, 'Next')
 
-// ---- the reckoning, on every phone and on the big screen
+// ---- the reckoning, on every phone and on the big screen: the recap
+// story beat plays on the stage, then awards land with the standings
+await see(tv, 'HOW THE NIGHT WENT')
 for (const page of [...all, tv]) {
   await see(page, 'FINAL SCORES')
   await see(page, 'Villain of the night')
 }
+await see(james, 'THE AWARDS')
+await see(james, 'promised, then held')              // Marco's broken 🤝, remembered
+await see(tv, 'fed the bowl')
 
 // ---- the stage saw everything public and nothing private: the three
 // deliberate exposures (bowl read, blackmail reveal, burn) appear; the
@@ -240,8 +253,8 @@ assert.equal(relay.store.query({ kinds: [1059], '#p': [stagePub] }).length, 0,
 // trades +3; R3 betrayal: Marco +5 / James +1; Marco's bowl read +2 (all
 // guesses wrong); finale: reveal +2, vaults +2, burn +1
 const score = async (page, name) => Number(await page.locator('.score-row', { hasText: name }).first().locator('.pts').textContent(T))
-assert.equal(await score(james, 'James'), 3 + 3 + 1 * 2 + 3 * 3 + 2)
-assert.equal(await score(james, 'Marco'), 3 + (3 + 2) + 5 * 2 + 3 * 3 + 1)
+assert.equal(await score(james, 'James'), 3 + 3 + 1 * 2 + 3 * 3 + 2 + 2)  // reveal + closing vault
+assert.equal(await score(james, 'Marco'), 3 + (3 + 2) + 5 * 2 + 3 * 3 + 1 + 2)  // burn + closing vault
 assert.equal(await score(james, 'Sarah'), 3 + 3 + 3 * 2 + 3 * 3 + 2)
 assert.equal(await score(james, 'Priya'), 3 + 3 + 3 * 2 + 3 * 3 + 2)
 

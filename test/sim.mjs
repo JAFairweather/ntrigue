@@ -315,7 +315,8 @@ assert.equal(state.finale.step, 'result')
 assert.equal(state.scores[james.pub], 11)
 host('advance')
 
-// turn 2 — Priya extorts James with his round-1 secret; he refuses; she reveals
+// turn 2 — Priya extorts James with his round-1 secret; he refuses; she
+// reveals. She still holds two more, so the hand isn't over: she vaults out.
 apply({ type: 'finale_choice', pub: priya.pub, action: 'extort', owner: james.pub, round: 1 })
 assert.equal(state.finale.step, 'extort')
 apply({ type: 'extort_response', pub: sarah.pub, turn: 1, pay: true }, false)  // only the target
@@ -325,28 +326,55 @@ apply({ type: 'blackmail_decision', pub: priya.pub, turn: 1, reveal: true, text:
 assert.equal(state.scores[priya.pub], 19)
 assert.equal(state.exposed[0].text, secretText(james, 1))
 host('advance')
+assert.equal(state.phase, 'finale')
+assert.equal(state.finale.turn, 1, 'unspent ammunition keeps the hand alive')
+assert.equal(state.finale.step, 'choose')
+apply({ type: 'finale_choice', pub: priya.pub, action: 'extort', owner: james.pub, round: 1 }, false) // spent is spent
+apply({ type: 'finale_choice', pub: priya.pub, action: 'vault' })              // the vault closes the hand
+assert.equal(state.scores[priya.pub], 21)
+host('advance')
 
-// turn 3 — Sarah extorts Marco with his round-1 secret; he pays
+// turn 3 — Sarah extorts Marco with his round-1 secret; he pays; she banks
+// the rest in the vault
 apply({ type: 'finale_choice', pub: sarah.pub, action: 'extort', owner: marco.pub, round: 1 })
 apply({ type: 'extort_response', pub: marco.pub, turn: 2, pay: true })
 assert.equal(state.scores[sarah.pub], 29)
 assert.equal(state.scores[marco.pub], 28)
 host('advance')
+apply({ type: 'finale_choice', pub: sarah.pub, action: 'vault' })
+assert.equal(state.scores[sarah.pub], 31)
+host('advance')
 
-// turn 4 — Marco burns Priya's round-4 secret, straight to the room
+// turn 4 — Marco burns Priya's round-4 secret, then shuts the vault himself
 apply({ type: 'finale_choice', pub: marco.pub, action: 'burn', owner: james.pub, round: 2 }, false) // not held
 apply({ type: 'finale_choice', pub: marco.pub, action: 'burn', owner: priya.pub, round: 4, text: marco.collected[`${priya.pub}:4`] })
 assert.equal(state.scores[marco.pub], 29)
 host('advance')
+apply({ type: 'finale_choice', pub: marco.pub, action: 'burn', owner: priya.pub, round: 4 }, false)  // spent is spent
+apply({ type: 'finale_choice', pub: marco.pub, action: 'vault' })
+host('advance')
 
 // ---- the reckoning
 assert.equal(state.phase, 'final')
-assert.deepEqual(P.map(p => state.scores[p.pub]), [11, 29, 19, 29])
+assert.deepEqual(P.map(p => state.scores[p.pub]), [11, 31, 21, 31])
 assert.equal(state.ending.villain, 'Marco')
 assert.equal(state.ending.vd, 2)
 assert.equal(state.ending.sucker, 'James')
 assert.equal(state.ending.sn, 3)
 assert.ok(state.quip.includes('Marco') && state.quip.includes('James'))
+
+// ---- awards + recap: templated from what actually happened, no AI needed
+const award = (k) => state.ending.awards.find(a => a.k === k)
+assert.equal(award('openBook').name, 'James', 'most shares (3, ties resolve to first earned)')
+assert.equal(award('vault').name, 'Sarah', 'most holds (2, ties resolve to first earned)')
+assert.equal(award('snake').name, 'Priya', 'promised in the deal window, then held')
+assert.equal(award('bold').name, 'James', 'fed the bowl')
+// the story: warm-up wiped, then betrayals, the broken promise, the bowl,
+// and the finale's knives — in order
+const ts = state.story.map(e => e.t)
+assert.deepEqual(ts, ['promiseBroken', 'betrayal', 'bowl', 'betrayal', 'betrayal', 'betrayal', 'exposed', 'paid', 'burn'])
+assert.deepEqual(state.story[1], { t: 'betrayal', winner: 'Priya', loser: 'James', r: 1, m: 1 })
+assert.equal(state.story[5].m, 3, 'the money round is remembered at its stakes')
 
 // ---- style profiles evolved correctly against this scripted log:
 // James was betrayed thrice (The Mark, earned R3, outlasting his R1 Open
