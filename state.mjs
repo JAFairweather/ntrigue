@@ -11,7 +11,7 @@
 
 import { sha256, bytesToHex } from './vendor/nostr-tools.js'
 
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 export const PHASES = ['lobby', 'prompt', 'pairing', 'deal', 'dilemma', 'outcome', 'table_read', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
 export const ROUNDS = 4
@@ -112,6 +112,7 @@ export function initialState({ gid, host, relays }) {
     collected: {},              // pub -> [{owner, round}] — public knowledge
     finale: null,
     exposed: [],                // [{owner, round, text, by, how}] — can't un-tell
+    story: [],                  // the night's beats, by name — feeds the recap + awards
     quip: '',                   // current card's host line
     ending: null,               // {villain, sucker, vd, sn}
   }
@@ -292,6 +293,8 @@ function resolveRound(state, content) {
     // outcome carries who broke their word so every screen can land the knife
     const broken = [[a, ca], [b, cb]].filter(([p, c]) => state.promises[p] && c === 'HOLD').map(([p]) => p)
     const brk = broken.length ? { broken } : {}
+    for (const p of broken)
+      state.story.push({ t: 'promiseBroken', name: nameOf(state, p), r: state.round })
     const m = multFor(state.round)                            // the stakes climb
     const add = (pub, n) => { state.scores[pub] = (state.scores[pub] || 0) + n * m }
     const collect = (holder, owner) => {
@@ -318,6 +321,7 @@ function resolveRound(state, content) {
     state.daggers[winner] = (state.daggers[winner] || 0) + 1
     state.suffered[loser] = (state.suffered[loser] || 0) + 1
     collect(winner, loser)
+    state.story.push({ t: 'betrayal', winner: nameOf(state, winner), loser: nameOf(state, loser), r: state.round, m })
     return {
       a, b, ca, cb, kind: 'betrayal', winner, loser, ...brk,
       quip: quip(content, 'betrayal',
@@ -353,6 +357,7 @@ function revealTableRead(state, content) {
   for (const [g, owner] of Object.entries(tr.guesses))
     if (owner === tr.by) { right++; state.scores[g] = (state.scores[g] || 0) + BOWL.guess }
   state.exposed.push({ owner: tr.by, round: state.round, text: tr.text, by: tr.by, how: 'bowl' })
+  state.story.push({ t: 'bowl', name: nameOf(state, tr.by), r: state.round })
   state.quip = quip(content, 'table_read_reveal',
     { author: nameOf(state, tr.by), right: String(right) }, `${state.gid}:${state.round}:tr`)
 }
@@ -362,9 +367,14 @@ function startFinale(state) {
     .sort((x, y) => (state.scores[x.pub] || 0) - (state.scores[y.pub] || 0) || y.seat - x.seat)
     .map(p => p.pub)
   state.phase = 'finale'
-  state.finale = { order, turn: 0, step: 'choose', action: null }
+  state.finale = { order, turn: 0, step: 'choose', action: null, used: [], moves: {} }
   beginTurn(state)
 }
+
+// Ammunition is spent when brandished: a burned or extorted secret can't be
+// raised twice, whether the squeeze got paid or not.
+export const unspentOf = (state, pub) =>
+  (state.collected[pub] || []).filter(c => !state.finale?.used.includes(`${pub}:${c.owner}:${c.round}`))
 
 function beginTurn(state) {
   const f = state.finale
@@ -372,16 +382,27 @@ function beginTurn(state) {
   f.step = 'choose'
   f.action = null
   state.quip = ''
-  if (!(state.collected[actor] || []).length) {          // nothing collected →
-    f.action = { kind: 'vault', auto: true }             // non-humiliating pass
+  if (!unspentOf(state, actor).length) {               // nothing to spend →
+    f.action = { kind: 'vault', auto: true }           // non-humiliating pass
     state.scores[actor] = (state.scores[actor] || 0) + FINALE.vaultBonus
     bump(state, actor, 'va')
     f.step = 'result'
   }
 }
 
+// One move each was a whimper: an actor now keeps playing while they hold
+// unspent ammunition (up to 3 moves), and the vault always closes the hand —
+// so the finale's length follows what the night actually collected.
 function finishFinaleTurn(state, content) {
   const f = state.finale
+  const actor = f.order[f.turn]
+  f.moves[actor] = (f.moves[actor] || 0) + 1
+  if (f.action?.kind !== 'vault' && f.moves[actor] < 3 && unspentOf(state, actor).length) {
+    f.step = 'choose'
+    f.action = null
+    state.quip = ''
+    return
+  }
   if (f.turn + 1 < f.order.length) { f.turn++; beginTurn(state) }
   else endGame(state, content)
 }
@@ -392,10 +413,37 @@ function endGame(state, content) {
   state.ending = {
     villain: villain.name, vd: state.daggers[villain.pub] || 0,
     sucker: sucker.name, sn: state.suffered[sucker.pub] || 0,
+    awards: buildAwards(state),
   }
   state.phase = 'final'
   state.quip = quip(content, 'closing', state.ending, state.gid)
   evalStyles(state, content)
+}
+
+// Templated awards from what actually happened — no AI required. Each is a
+// {k, name, n}; ties resolve to whoever earned it first.
+function buildAwards(state) {
+  const topBy = (m) => {
+    const es = Object.entries(m).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])
+    return es[0] || null
+  }
+  const counterTally = (key) => {
+    const m = {}
+    for (const p of state.players) m[p.name] = state.counters[p.pub]?.[key] || 0
+    return m
+  }
+  const storyTally = (t, key) => {
+    const m = {}
+    for (const e of state.story) if (e.t === t) m[e[key]] = (m[e[key]] || 0) + 1
+    return m
+  }
+  const awards = []
+  const push = (k, hit) => { if (hit) awards.push({ k, name: hit[0], n: hit[1] }) }
+  push('openBook', topBy(counterTally('sh')))
+  push('vault', topBy(counterTally('ho')))
+  push('snake', topBy(storyTally('promiseBroken', 'name')))
+  push('bold', topBy(storyTally('bowl', 'name')))
+  return awards
 }
 
 // ------------------------------------------------------------ the reducer
@@ -518,30 +566,35 @@ export function reduce(prev, act, content) {
 
     case 'finale_choice': {
       if (state.phase !== 'finale' || f().step !== 'choose' || act.pub !== actor()) return prev
-      const mine = state.collected[act.pub] || []
+      const mine = unspentOf(state, act.pub)              // spent leverage stays spent
       const owns = (o, r) => mine.some(c => c.owner === o && c.round === r)
+      const spend = (o, r) => f().used.push(`${act.pub}:${o}:${r}`)
       const add = (n) => { state.scores[act.pub] = (state.scores[act.pub] || 0) + n }
+      const move = f().moves[act.pub] || 0
       if (act.action === 'vault') {
         add(FINALE.vaultBonus)
         bump(state, act.pub, 'va')
         f().action = { kind: 'vault' }
         f().step = 'result'
-        state.quip = quip(content, 'vault', { actor: nameOf(state, act.pub) }, `${state.gid}:f${f().turn}`)
+        state.quip = quip(content, 'vault', { actor: nameOf(state, act.pub) }, `${state.gid}:f${f().turn}:${move}`)
       } else if (act.action === 'burn') {
         if (!owns(act.owner, act.round)) return prev
+        spend(act.owner, act.round)
         add(FINALE.burnBonus)
         bump(state, act.pub, 'bu')
         state.exposed.push({ owner: act.owner, round: act.round, text: String(act.text || ''), by: act.pub, how: 'burn' })
+        state.story.push({ t: 'burn', by: nameOf(state, act.pub), owner: nameOf(state, act.owner) })
         f().action = { kind: 'burn', owner: act.owner, round: act.round }
         f().step = 'result'
         state.quip = quip(content, 'burn',
-          { actor: nameOf(state, act.pub), owner: nameOf(state, act.owner) }, `${state.gid}:f${f().turn}`)
+          { actor: nameOf(state, act.pub), owner: nameOf(state, act.owner) }, `${state.gid}:f${f().turn}:${move}`)
       } else if (act.action === 'extort') {
         if (!owns(act.owner, act.round)) return prev
+        spend(act.owner, act.round)
         f().action = { kind: 'extort', owner: act.owner, round: act.round }
         f().step = 'extort'
         state.quip = quip(content, 'extort_open',
-          { blackmailer: nameOf(state, act.pub), target: nameOf(state, act.owner) }, `${state.gid}:f${f().turn}`)
+          { blackmailer: nameOf(state, act.pub), target: nameOf(state, act.owner) }, `${state.gid}:f${f().turn}:${move}`)
       } else return prev
       return state
     }
@@ -554,6 +607,7 @@ export function reduce(prev, act, content) {
         bump(state, actor(), 'exw')
         f().action.paid = true
         f().step = 'result'
+        state.story.push({ t: 'paid', target: nameOf(state, act.pub), blackmailer: nameOf(state, actor()) })
         state.quip = quip(content, 'pay',
           { target: nameOf(state, act.pub), blackmailer: nameOf(state, actor()) }, `${state.gid}:f${f().turn}`)
       } else {
@@ -573,6 +627,7 @@ export function reduce(prev, act, content) {
           text: String(act.text || ''), by: act.pub, how: 'blackmail',
         })
         f().action.revealed = true
+        state.story.push({ t: 'exposed', by: nameOf(state, act.pub), owner: nameOf(state, f().action.owner) })
         state.quip = quip(content, 'reveal_intro',
           { owner: nameOf(state, f().action.owner) }, `${state.gid}:f${f().turn}`)
       } else {
@@ -603,7 +658,7 @@ export function reduce(prev, act, content) {
           return state
         case 'debrief':                                // warm-up over: wipe everything it touched
           Object.assign(state, {
-            practice: false, scores: {}, daggers: {}, suffered: {}, collected: {},
+            practice: false, scores: {}, daggers: {}, suffered: {}, collected: {}, story: [],
             counters: {}, styles: {}, styleHist: {}, styleSeq: 0, styleChange: null,
           })
           startRound(state, content, 1)

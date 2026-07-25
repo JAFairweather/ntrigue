@@ -115,7 +115,7 @@ export const UI = {
   daggerLegend: '🗡 = took a secret and gave nothing back',
 
   finaleIntroTitle: 'THE BLACKMAIL FINALE',
-  finaleIntroBody: 'Everything you collected tonight is leverage. One move each, last place goes first: squeeze a friend, burn them for fun, or keep your mouth shut for profit.',
+  finaleIntroBody: 'Everything you collected tonight is leverage — and you can spend all of it. Last place goes first: squeeze a friend, burn them for fun, or shut the vault for profit. The vault ends your turn; the knives don’t.',
   finaleIntroStart: 'Begin',
 
   finaleYourMove: 'Your move, {name}.',
@@ -128,6 +128,8 @@ export const UI = {
   finaleVault: 'Vault',
   finaleVaultDesc: 'Say nothing. +2 for discretion.',
   finaleWatching: '{name} is deciding…',
+  finaleAgain: '{name} isn’t done — another card comes out.',
+  finaleHolds: '{name} still holds {n}.',
   finaleAutoVault: '{name} collected nothing all night — the vault takes them anyway. +2.',
 
   extortTitle: '{blackmailer} has one of your secrets.',
@@ -149,6 +151,19 @@ export const UI = {
   finalTitle: 'FINAL SCORES',
   villainAward: 'Villain of the night',
   suckerAward: 'Biggest sucker',
+  awardsTitle: 'THE AWARDS',
+  awardOpenBook: 'The Open Book — shared the most',
+  awardVault: 'The Iron Vault — gave up nothing',
+  awardSnake: 'Snake of the night — promised, then held',
+  awardBold: 'Boldest pen — fed the bowl and owned it',
+  recapTitle: 'HOW THE NIGHT WENT',
+  storyBetrayal: 'R{r}: {winner} took {loser}’s secret and gave nothing back.',
+  storyBetrayalBig: 'R{r}, stakes ×{m}: {winner} took {loser}’s secret and gave nothing back.',
+  storyPromise: 'R{r}: {name} promised to share — then held.',
+  storyBowl: 'R{r}: {name} fed the bowl and the room heard every word.',
+  storyBurn: '{by} burned {owner}’s secret, just to watch it go.',
+  storyExposed: '{by} squeezed {owner}, got refused, and told the room anyway.',
+  storyPaid: '{target} paid {blackmailer} for silence. The room noticed.',
   playAgain: 'Play again',
 
   rejoinReturning: 'Welcome back. Rejoining the table…',
@@ -269,4 +284,20 @@ export const fill = (template, slots = {}) => {
   let s = template
   for (const [k, v] of Object.entries(slots)) s = s.split(`{${k}}`).join(v)
   return s
+}
+
+// Recap rendering: a state.story event → one line, from the scanned
+// templates above. Shared by the phone and the stage.
+export const AWARD_TITLES = {
+  openBook: UI.awardOpenBook, vault: UI.awardVault, snake: UI.awardSnake, bold: UI.awardBold,
+}
+export const storyLine = (e) => {
+  if (e.t === 'betrayal') return fill(e.m > 1 ? UI.storyBetrayalBig : UI.storyBetrayal,
+    { r: String(e.r), m: String(e.m), winner: e.winner, loser: e.loser })
+  if (e.t === 'promiseBroken') return fill(UI.storyPromise, { r: String(e.r), name: e.name })
+  if (e.t === 'bowl') return fill(UI.storyBowl, { r: String(e.r), name: e.name })
+  if (e.t === 'burn') return fill(UI.storyBurn, { by: e.by, owner: e.owner })
+  if (e.t === 'exposed') return fill(UI.storyExposed, { by: e.by, owner: e.owner })
+  if (e.t === 'paid') return fill(UI.storyPaid, { target: e.target, blackmailer: e.blackmailer })
+  return ''
 }
