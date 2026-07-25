@@ -16,6 +16,8 @@ export const UI = {
   lobbyTitle: 'The table is open',
   lobbyShare: 'Friends scan this, or open the link:',
   lobbyCopyLink: 'Copy link',
+  lobbyCopyInvite: 'Copy short invite',
+  lobbyInviteHint: 'The short invite fits a group chat — it finds the table by its 4-letter code.',
   lobbyCopied: 'Copied!',
   lobbyWaiting: 'Waiting for friends…',
   lobbySeated: '{n} at the table',

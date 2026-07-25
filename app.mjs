@@ -74,12 +74,30 @@ function parseFragment() {
   }
 }
 
+// One-tap join: resolve a 4-letter code to the full game link and reload
+// into it. Serves both the typed fallback and the short #join=CODE invite.
+async function joinByCode(code) {
+  ctx.ui.codeSearching = true; render()
+  const pre = new URLSearchParams(location.hash.slice(1))
+  const override = (pre.get('r') || '').split(',').filter(Boolean).map(decodeURIComponent)
+  const net = new Net(override.length ? override : DEFAULT_RELAYS)
+  const found = await findGameByCode(net, code).catch(() => null)
+  net.close()
+  if (!found) { ctx.ui.codeSearching = false; ctx.ui.codeMiss = true; return render() }
+  location.hash = `g=${found.gid}&r=${found.relays.map(encodeURIComponent).join(',')}&h=${found.hostPub}`
+  location.reload()
+}
+
 async function main() {
   await loadContent()
   document.body.addEventListener('click', onTap)
   const frag = parseFragment()
-  if (!frag) return render()          // landing
-  await enterGame(frag)
+  if (frag) return enterGame(frag)
+  // a short invite (#join=CODE) finds the table on its own — the guest only
+  // ever types their name; the typed code stays as the fallback
+  const joinCode = new URLSearchParams(location.hash.slice(1)).get('join')
+  if (joinCode && /^[A-Za-z0-9]{4}$/.test(joinCode)) return joinByCode(joinCode.toUpperCase())
+  render()                            // landing
 }
 
 async function enterGame({ gid, relays, hostPub }) {
@@ -653,6 +671,12 @@ async function onTap(ev) {
     setTimeout(() => { ctx.ui.copied = false; render() }, 1500)
     return
   }
+  if (act === 'copy-invite') {
+    await navigator.clipboard?.writeText(inviteUrl()).catch(() => {})
+    ctx.ui.copiedShort = true; render()
+    setTimeout(() => { ctx.ui.copiedShort = false; render() }, 1500)
+    return
+  }
   if (act === 'join') {
     const name = $('#name-input')?.value?.trim().slice(0, 12)
     if (!name) return
@@ -730,16 +754,7 @@ async function onTap(ev) {
   if (act === 'code-join') {
     const code = $('#code-input')?.value?.trim().toUpperCase()
     if (!code || code.length !== 4) return
-    ctx.ui.codeSearching = true; render()
-    const pre = new URLSearchParams(location.hash.slice(1))
-    const override = (pre.get('r') || '').split(',').filter(Boolean).map(decodeURIComponent)
-    const net = new Net(override.length ? override : DEFAULT_RELAYS)
-    const found = await findGameByCode(net, code).catch(() => null)
-    net.close()
-    if (!found) { ctx.ui.codeSearching = false; ctx.ui.codeMiss = true; return render() }
-    location.hash = `g=${found.gid}&r=${found.relays.map(encodeURIComponent).join(',')}&h=${found.hostPub}`
-    location.reload()
-    return
+    return joinByCode(code)
   }
   if (act === 'host-sound')
     return send(`host:sound:${now()}`, { type: 'sound', on: !s.sound })
@@ -838,6 +853,13 @@ async function createGame() {
 
 const joinUrl = () => location.origin + location.pathname +
   `#g=${ctx.gid}&r=${ctx.relays.map(encodeURIComponent).join(',')}&h=${ctx.hostPub}`
+// the chat-friendly version: just the room code (plus table settings when
+// they aren't the defaults) — it resolves itself on open
+const inviteUrl = () => {
+  const custom = ctx.relays.join(',') !== DEFAULT_RELAYS.join(',')
+  return location.origin + location.pathname + `#join=${ctx.state.code}` +
+    (custom ? `&r=${ctx.relays.map(encodeURIComponent).join(',')}` : '')
+}
 
 const nameOf = (pub) => ctx.state?.players.find(p => p.pub === pub)?.name || '?'
 const seated = () => [...(ctx.state?.players || [])].sort((a, b) => a.seat - b.seat)
@@ -1015,6 +1037,8 @@ function vLobby() {
       ${s.stage ? '' : `<div class="qr">${qr}</div>`}
       <p class="mute small">${esc(UI.lobbyShare)}</p>
       ${btn(ctx.ui.copied ? UI.lobbyCopied : UI.lobbyCopyLink, 'copy-link', '', 'btn ghost')}
+      ${btn(ctx.ui.copiedShort ? UI.lobbyCopied : UI.lobbyCopyInvite, 'copy-invite', '', 'btn ghost')}
+      <p class="mute small">${esc(UI.lobbyInviteHint)}</p>
       <p class="mute small">${esc(fill(UI.tvHint, { url: tvUrl, code: s.code }))}</p>
       ${s.stage ? btn(s.sound ? UI.soundOn : UI.soundOff, 'host-sound', '', 'btn ghost') : ''}
       ${ctx.ui.netWarn ? `<p class="small hot-text">${esc(UI.netCheckWarn)}</p>` : ''}
