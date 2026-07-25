@@ -77,10 +77,24 @@ from the landing screen.
 node test/banned-words.mjs   # the language rule, over all player-visible copy
 node test/sim.mjs            # full scripted game through reducer + real crypto
                              # + adversarial relay-observer + stage-privacy checks
+node test/engine.mjs         # a full night played headless through engine.mjs
 node test/bots.mjs           # the solo night: 1 human + 2 robot guests to the end
 node test/e2e.mjs            # 4 real browsers + a TV stage play a complete night
                              # (dev deps: npm i playwright ws — not committed;
                              #  PLAYWRIGHT_CHROMIUM=<path> to override the browser)
+```
+
+## Headless play (engine.mjs)
+
+`engine.mjs` is the supported way to drive a game without the browser: one
+`Engine` per seat, the same reducer/transport/action ids as the app, so
+engines and phones can share a table. Agents, CI, and play-test bots use the
+move API (`sitDown`, `lockSecret`, `bowl`, `promise`, `choose`, `whodunit`,
+finale moves, host controls) plus `waitFor(pred)` to follow the state.
+
+```sh
+node engine.mjs host --relay ws://localhost:7777    # open a table, print code + links
+node engine.mjs bot ABCD Robo                       # join by code and play a full night
 ```
 
 ## v1 — Stage mode (M-TV)
