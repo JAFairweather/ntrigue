@@ -83,6 +83,17 @@ await tv.locator('#tv-code').fill(code, T)
 await tv.getByRole('button', { name: 'Find the table' }).click(T)
 await see(tv, 'Marco')                               // lobby roster on the big screen
 if (process.env.SNAP) await tv.screenshot({ path: process.env.SNAP })
+
+// ---- one-tap join: a short #join=CODE invite finds the table on its own —
+// the guest lands on the name screen without typing a thing
+{
+  const guestContext = await browser.newContext({ viewport: { width: 390, height: 720 } })
+  await guestContext.addInitScript(() => sessionStorage.setItem('naveIntroSeen', '1'))
+  const guest = await guestContext.newPage()
+  await guest.goto(`http://localhost:8899/index.html#join=${code.toLowerCase()}&r=${encodeURIComponent('ws://localhost:7777')}`)
+  await see(guest, 'Pull up a chair')                // resolved, name-only join
+  await guestContext.close()                         // …but this guest never sits down
+}
 await see(sarah, '📺')                               // phones flag the stage
 await see(james, 'Warm-up round: on')                // practice defaults on
 await see(james, 'Tonight’s menu')                   // flavor picker, innocent default
