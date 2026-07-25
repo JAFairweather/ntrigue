@@ -11,7 +11,7 @@
 
 import { sha256, bytesToHex } from './vendor/nostr-tools.js'
 
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 export const PHASES = ['lobby', 'prompt', 'pairing', 'deal', 'dilemma', 'outcome', 'table_read', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final']
 export const ROUNDS = 4
@@ -24,6 +24,10 @@ export const ROUNDS = 4
 export const DEAL_SECS = 25
 
 export const PAYOFF = { trade: 3, betrayWin: 5, betrayLose: 1, hold: 1 }
+// Stakes climb: later rounds multiply the payoff table, so the night has a
+// money round instead of four identical dilemmas. Warm-up stays at base.
+export const ROUND_MULT = { 0: 1, 1: 1, 2: 1, 3: 2, 4: 3 }
+export const multFor = (round) => ROUND_MULT[round] ?? 1
 export const FINALE = { extortPrice: 3, revealBonus: 2, burnBonus: 1, vaultBonus: 2 }
 // The bowl: courage, paid. Anyone can drop a copy of their confession in the
 // bowl at write time; after the round's outcomes one entry is drawn and read
@@ -35,11 +39,24 @@ export const BOWL = { author: 2, guess: 1 }
 // Deck flavors: the host picks the night's heat in the lobby. 'mild' is the
 // default — the very-playable first game. Generated (AI) and legacy decks
 // carry a top-level rounds array and bypass flavors entirely.
-export const FLAVORS = ['mild', 'spicy', 'scorching']
+export const FLAVORS = ['mild', 'spicy', 'scorching', 'arc']
 export function flavorRounds(content, flavor) {
   if (content.deck.rounds) return content.deck.rounds
   const fl = content.deck.flavors
   return (fl.find(f => f.id === flavor) || fl[0]).rounds
+}
+
+// Heat: 'arc' climbs the night on its own (the natural shape of a dinner),
+// and the table can vote to turn it up between rounds — `heatBump` shifts
+// the remaining rounds up the ladder, capped at scorching. Prompt text
+// travels in public state, so a mid-game heat change is safe for clients.
+const HEAT_LADDER = ['mild', 'spicy', 'scorching']
+export const ARC = { 1: 'mild', 2: 'mild', 3: 'spicy', 4: 'scorching' }
+export function heatFor(flavor, round, bump = 0) {
+  const base = flavor === 'arc' ? (ARC[round] || 'mild') : flavor
+  const i = HEAT_LADDER.indexOf(base)
+  if (i < 0) return base                     // generated/legacy decks: unchanged
+  return HEAT_LADDER[Math.min(i + bump, HEAT_LADDER.length - 1)]
 }
 
 // Stage (TV) client: heartbeat cadence and how stale a stage may go before
@@ -72,6 +89,7 @@ export function initialState({ gid, host, relays }) {
     round: 0,
     practice: false,            // true during the warm-up round (round 0)
     flavor: 'mild',             // deck heat, picked by the host at start
+    heatBump: 0,                // "turn it up" votes — shifts remaining rounds hotter
     players: [],                // [{pub, name, seat}] — seat assigned at start
     promptId: null,
     promptText: null,           // the drawn prompt's text — carries generated
@@ -173,7 +191,7 @@ const nameOf = (state, pub) => state.players.find(p => p.pub === pub)?.name || '
 const leader = (state) =>
   [...state.players].sort((a, b) => (state.scores[b.pub] || 0) - (state.scores[a.pub] || 0))[0]
 
-const isHostAct = (t) => ['order', 'start', 'override', 'advance', 'redraw', 'force', 'stage_gone', 'sound', 'mc_quip', 'mc_roast'].includes(t)
+const isHostAct = (t) => ['order', 'start', 'override', 'advance', 'redraw', 'force', 'heat_up', 'stage_gone', 'sound', 'mc_quip', 'mc_roast'].includes(t)
 
 const bump = (state, pub, key, n = 1) => {
   const c = state.counters[pub] = state.counters[pub] ||
@@ -234,7 +252,7 @@ function evalStyles(state, content) {
 function drawPrompt(state, content) {
   // round 0 draws from the mild warm-up pool (fall back to round 1's pool
   // for decks without one, e.g. generated decks)
-  const rounds = flavorRounds(content, state.flavor)
+  const rounds = flavorRounds(content, heatFor(state.flavor, state.round || 1, state.heatBump))
   const source = state.round === 0
     ? (content.deck.practice || rounds.find(r => r.round === 1).prompts)
     : rounds.find(r => r.round === state.round).prompts
@@ -274,7 +292,8 @@ function resolveRound(state, content) {
     // outcome carries who broke their word so every screen can land the knife
     const broken = [[a, ca], [b, cb]].filter(([p, c]) => state.promises[p] && c === 'HOLD').map(([p]) => p)
     const brk = broken.length ? { broken } : {}
-    const add = (pub, n) => { state.scores[pub] = (state.scores[pub] || 0) + n }
+    const m = multFor(state.round)                            // the stakes climb
+    const add = (pub, n) => { state.scores[pub] = (state.scores[pub] || 0) + n * m }
     const collect = (holder, owner) => {
       (state.collected[holder] = state.collected[holder] || []).push({ owner, round: state.round })
     }
@@ -432,6 +451,16 @@ export function reduce(prev, act, content) {
       state.redrawsLeft--
       drawPrompt(state, content)
       return state
+    case 'heat_up': {                                  // between rounds: the table turns it up
+      if (!['scoreboard', 'debrief'].includes(state.phase) || state.round >= ROUNDS) return prev
+      if (state.heatBump >= 2) return prev
+      const before = heatFor(state.flavor, state.round + 1, state.heatBump)
+      state.heatBump++
+      const after = heatFor(state.flavor, state.round + 1, state.heatBump)
+      if (before === after && state.flavor !== 'arc') { return prev }   // already scorching
+      state.quip = quip(content, 'heat_up', {}, `${state.gid}:${state.round}:${state.heatBump}`)
+      return state
+    }
 
     case 'bowl': {                                     // "read mine to the room" — opt-in only
       if (state.phase !== 'prompt' || act.round !== state.round) return prev

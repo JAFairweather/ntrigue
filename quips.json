@@ -107,6 +107,12 @@
       "{author} wrote that and put it in the bowl on purpose. Legend.",
       "Confirmed: {author}. {right} of you saw right through them.",
       "{author}, taking a bow. That's how you play a game called NTRIGUE."
+    ],
+    "heat_up": [
+      "The table votes for heat. The prompts get braver from here.",
+      "Someone said 'turn it up.' Nobody objected loudly enough.",
+      "The thermostat only goes one way tonight.",
+      "Bolder questions incoming. Blame whoever's smiling."
     ]
   }
 }

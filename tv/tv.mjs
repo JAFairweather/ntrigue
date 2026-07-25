@@ -6,7 +6,7 @@
 
 import { generateSecretKey, getPublicKey, bytesToHex, hexToBytes, qrfactory } from '../vendor/nostr-tools.js'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, findGameByCode } from '../net.mjs'
-import { SCHEMA_VERSION, STAGE_PING_SECS, DEAL_SECS, flavorRounds } from '../state.mjs'
+import { SCHEMA_VERSION, STAGE_PING_SECS, DEAL_SECS, flavorRounds, heatFor, multFor } from '../state.mjs'
 import { UI, fill } from '../copy.mjs'
 
 const $ = (sel) => document.querySelector(sel)
@@ -269,8 +269,12 @@ function vLobby() {
 const tvRoundKicker = () => {
   const s = ctx.state
   if (s.round === 0) return esc(UI.practiceLabel)
-  const name = flavorRounds({ deck: ctx.deck }, s.flavor).find(r => r.round === s.round)?.name
+  const name = flavorRounds({ deck: ctx.deck }, heatFor(s.flavor, s.round, s.heatBump)).find(r => r.round === s.round)?.name
   return `${esc(fill(UI.roundLabel, { n: String(s.round) }))}${name ? ` · ${esc(name)}` : ''}`
+}
+const tvStakes = () => {
+  const m = multFor(ctx.state.round)
+  return m > 1 ? `<p class="tv-kicker hot-text">${esc(m === 2 ? UI.stakesX2 : UI.stakesX3)}</p>` : ''
 }
 
 function vPrompt() {
@@ -296,6 +300,7 @@ function vPairing() {
   const s = ctx.state
   return card(`
     <p class="tv-kicker">${tvRoundKicker()}</p>
+    ${tvStakes()}
     ${s.pairs.map(([a, b]) =>
       `<div class="tv-names">${esc(nameOf(a).toUpperCase())}<span class="vs">⇄</span>${esc(nameOf(b).toUpperCase())}</div>`).join('')}
     <p class="tv-quip">${esc(s.quip)}</p>
@@ -309,6 +314,7 @@ function vDeal() {
   const left = timerLeft(DEAL_SECS)
   return card(`
     <p class="tv-kicker">${tvRoundKicker()}</p>
+    ${tvStakes()}
     ${s.pairs.map(([a, b]) =>
       `<div class="tv-names">${esc(nameOf(a).toUpperCase())}${s.promises[a] ? ' 🤝' : ''}<span class="vs">⇄</span>${esc(nameOf(b).toUpperCase())}${s.promises[b] ? ' 🤝' : ''}</div>`).join('')}
     <div class="tv-timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>
@@ -322,6 +328,7 @@ function vDilemma() {
   const locked = s.pairs.flat().filter(p => s.commits[p]).length
   return card(`
     <p class="tv-kicker">${tvRoundKicker()}</p>
+    ${tvStakes()}
     ${s.pairs.map(([a, b]) =>
       `<div class="tv-names">${esc(nameOf(a).toUpperCase())}<span class="vs">⇄</span>${esc(nameOf(b).toUpperCase())}</div>`).join('')}
     <div class="tv-timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>

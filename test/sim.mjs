@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import { generateSecretKey, getPublicKey, bytesToHex } from '../vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from '../nipxx.mjs'
-import { initialState, reduce, commitHash, pairingsFor, roomCode, ARCHETYPES, flavorRounds, FLAVORS } from '../state.mjs'
+import { initialState, reduce, commitHash, pairingsFor, roomCode, ARCHETYPES, flavorRounds, FLAVORS, heatFor } from '../state.mjs'
 import { buildDeckInput, buildPublicLog, buildQuipInput, buildRoastInput, toDeckShape, extractJson } from '../mc.mjs'
 import { Relay } from './relay.mjs'
 
@@ -115,6 +115,19 @@ assert.equal(reduce(state, { type: 'start', pub: james.pub, flavor: 'nuclear' },
 // the bowl is a host toggle, on by default
 assert.equal(reduce(state, { type: 'start', pub: james.pub }, content).bowlOn, true)
 assert.equal(reduce(state, { type: 'start', pub: james.pub, bowl: false }, content).bowlOn, false)
+
+// ---- heat: the arc climbs on its own; "turn it up" shifts what's left, capped
+{
+  const s = reduce(state, { type: 'start', pub: james.pub, flavor: 'arc' }, content)
+  assert.equal(s.flavor, 'arc')
+  assert.ok(flavorRounds(content, 'mild').find(r => r.round === 1).prompts.some(p => p.id === s.promptId),
+    'the arc starts innocent')
+  assert.equal(heatFor('arc', 3, 0), 'spicy')
+  assert.equal(heatFor('arc', 4, 0), 'scorching')
+  assert.equal(heatFor('arc', 2, 1), 'spicy')            // a bump moves the early rounds up
+  assert.equal(heatFor('mild', 2, 1), 'spicy')
+  assert.equal(heatFor('scorching', 1, 2), 'scorching')  // capped at the top
+}
 
 host('start')
 assert.equal(state.phase, 'prompt')
@@ -260,6 +273,19 @@ for (let r = 1; r <= 4; r++) {
   }
   assert.equal(state.phase, 'scoreboard')
   assert.ok(P.every(p => state.styles[p.pub]), 'everyone always has a style label')
+  if (r === 1) {
+    // fork: the table turns it up at the scoreboard — host-only, and the
+    // next round draws from the hotter pool
+    const hot = reduce(state, { type: 'heat_up', pub: james.pub }, content)
+    assert.notEqual(hot, state)
+    assert.equal(hot.heatBump, 1)
+    assert.ok(hot.quip.length > 0)
+    assert.equal(reduce(state, { type: 'heat_up', pub: sarah.pub }, content), state, 'host only')
+    const next = reduce(hot, { type: 'advance', pub: james.pub }, content)
+    assert.ok(flavorRounds(content, 'spicy').find(x => x.round === 2).prompts.some(p => p.id === next.promptId),
+      'a bumped night draws the next round from the spicy pool')
+  }
+  if (r === 3) assert.equal(state.scores[marco.pub], 16, 'round 3 pays double (3+3+5×2)')
   host('advance')
 }
 
@@ -272,9 +298,9 @@ assert.equal(state.collected[marco.pub].length, 4)
 assert.equal(Object.keys(james.collected).length, 0)
 assert.equal(Object.keys(marco.collected).length, 4)
 
-// scores after 4 rounds: J 4 (betrayed 3x) +2 bowl = 6, S 12 +1 right guess
-// = 13, P 12, M 16 (2 🗡)
-assert.deepEqual(P.map(p => state.scores[p.pub]), [6, 13, 12, 16])
+// scores after 4 rounds, stakes ×1/×1/×2/×3: J 1+1+2+3 +2 bowl = 9,
+// S 3+1+6+15 +1 right guess = 26, P 5+3+6+3 = 17, M 3+3+10+15 = 31 (2 🗡)
+assert.deepEqual(P.map(p => state.scores[p.pub]), [9, 26, 17, 31])
 assert.equal(state.daggers[marco.pub], 2)
 assert.equal(state.suffered[james.pub], 3)
 
@@ -286,7 +312,7 @@ assert.deepEqual(state.finale.order, [james.pub, priya.pub, sarah.pub, marco.pub
 
 // turn 1 — James holds nothing: auto-vault (+2), non-humiliating pass
 assert.equal(state.finale.step, 'result')
-assert.equal(state.scores[james.pub], 8)
+assert.equal(state.scores[james.pub], 11)
 host('advance')
 
 // turn 2 — Priya extorts James with his round-1 secret; he refuses; she reveals
@@ -296,26 +322,26 @@ apply({ type: 'extort_response', pub: sarah.pub, turn: 1, pay: true }, false)  /
 apply({ type: 'extort_response', pub: james.pub, turn: 1, pay: false })
 assert.equal(state.finale.step, 'decide')
 apply({ type: 'blackmail_decision', pub: priya.pub, turn: 1, reveal: true, text: priya.collected[`${james.pub}:1`] })
-assert.equal(state.scores[priya.pub], 14)
+assert.equal(state.scores[priya.pub], 19)
 assert.equal(state.exposed[0].text, secretText(james, 1))
 host('advance')
 
 // turn 3 — Sarah extorts Marco with his round-1 secret; he pays
 apply({ type: 'finale_choice', pub: sarah.pub, action: 'extort', owner: marco.pub, round: 1 })
 apply({ type: 'extort_response', pub: marco.pub, turn: 2, pay: true })
-assert.equal(state.scores[sarah.pub], 16)
-assert.equal(state.scores[marco.pub], 13)
+assert.equal(state.scores[sarah.pub], 29)
+assert.equal(state.scores[marco.pub], 28)
 host('advance')
 
 // turn 4 — Marco burns Priya's round-4 secret, straight to the room
 apply({ type: 'finale_choice', pub: marco.pub, action: 'burn', owner: james.pub, round: 2 }, false) // not held
 apply({ type: 'finale_choice', pub: marco.pub, action: 'burn', owner: priya.pub, round: 4, text: marco.collected[`${priya.pub}:4`] })
-assert.equal(state.scores[marco.pub], 14)
+assert.equal(state.scores[marco.pub], 29)
 host('advance')
 
 // ---- the reckoning
 assert.equal(state.phase, 'final')
-assert.deepEqual(P.map(p => state.scores[p.pub]), [8, 16, 14, 14])
+assert.deepEqual(P.map(p => state.scores[p.pub]), [11, 29, 19, 29])
 assert.equal(state.ending.villain, 'Marco')
 assert.equal(state.ending.vd, 2)
 assert.equal(state.ending.sucker, 'James')

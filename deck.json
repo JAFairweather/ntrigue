@@ -521,5 +521,31 @@
         }
       ]
     }
-  ]
+  ],
+  "starters": {
+    "mild": [
+      "I still sleep with the door closed because of a movie I saw as a kid.",
+      "I have a food opinion I only defend when no one can fact-check me.",
+      "I practice arguments in the shower and always win.",
+      "There's a hobby I quit that I still tell people I do.",
+      "I pretend I've read a famous book. It's been years. I never will.",
+      "I have cried at a commercial and blamed the onions."
+    ],
+    "spicy": [
+      "I've let someone take the blame for something small I did.",
+      "There's a text I drafted and never sent — and it's still saved.",
+      "I once faked being busy to skip something that mattered to a friend.",
+      "I snooped once. I found something. I never told.",
+      "I have a grudge I feed like a houseplant.",
+      "I said 'I'm over it.' I am not over it."
+    ],
+    "scorching": [
+      "There's a person at this table I almost told something huge.",
+      "I kept a souvenir from a relationship I pretend never happened.",
+      "I once said 'I love you' without meaning it — to buy time.",
+      "There's a door I'd reopen tonight if the right person knocked.",
+      "The wildest thing I've done, nobody here knows about.",
+      "I know a secret about someone we all know — and it's a big one."
+    ]
+  }
 }
