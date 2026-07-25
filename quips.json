@@ -113,6 +113,34 @@
       "Someone said 'turn it up.' Nobody objected loudly enough.",
       "The thermostat only goes one way tonight.",
       "Bolder questions incoming. Blame whoever's smiling."
+    ],
+    "cb_promise": [
+      "{name} swore they'd share back in round {r}. Ask them how that went.",
+      "Round {r}: {name} made a promise to this table. The table remembers.",
+      "Still no apology from {name} for round {r}, by the way."
+    ],
+    "cb_shark": [
+      "{n} daggers by {name}'s seat and counting. Sit accordingly.",
+      "{name} has taken {n} secrets and given back air. Just saying.",
+      "The table's most dependable knife remains {name}."
+    ],
+    "cb_daggered": [
+      "{name} has been burned {n} times tonight. Somebody refill their glass.",
+      "{n} betrayals deep, {name} still believes in people. Beautiful.",
+      "At this point {name} flinches when anyone smiles at them."
+    ],
+    "cb_collector": [
+      "{n} secrets sit in {name}'s pocket — and the finale is where pockets get emptied.",
+      "{name} is quietly holding {n} of your confessions. Sleep well.",
+      "{name} hoards secrets like winter is coming. {n} so far."
+    ],
+    "cb_exposed": [
+      "{n} confessions out in the open already, and the night's not done.",
+      "This room has heard {n} things it cannot un-hear."
+    ],
+    "cb_quiet": [
+      "No daggers yet. Suspiciously polite table.",
+      "Everyone's playing nice. That never lasts."
     ]
   }
 }

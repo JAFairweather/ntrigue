@@ -399,13 +399,16 @@ function vScoreboard() {
     <p class="tv-kicker">${esc(fill(UI.scoreboardTitle, { n: String(s.round) }))}</p>
     <ul class="tv-scores">${tvScoreRows()}</ul>
     <p class="tv-quip">${esc(s.quip)}</p>
+    ${s.callback ? `<p class="tv-mute">${esc(s.callback)}</p>` : ''}
   `)
 }
 
 function vFinaleIntro() {
+  const s = ctx.state
   return card(`
     <h1 class="tv-logo hot-text">${esc(UI.finaleIntroTitle)}</h1>
     <p class="tv-body">${esc(UI.finaleIntroBody)}</p>
+    ${s.callback ? `<p class="tv-quip">${esc(s.callback)}</p>` : ''}
   `)
 }
 
