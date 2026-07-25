@@ -97,6 +97,8 @@ for (let i = 0; i < 400 && !finished; i++) {
     await tapIf('Begin')
   } else if (await btnVisible('Everyone’s in')) {
     await tapIf('Everyone’s in')
+  } else if (await host.locator('[data-act="whodunit"]').first().isVisible().catch(() => false)) {
+    await host.locator('[data-act="whodunit"]').first().click({ timeout: 3000 }).catch(() => {})
   } else if (await btnVisible('Next')) {
     await tapIf('Next')
   }

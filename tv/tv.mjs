@@ -207,8 +207,8 @@ function render() {
   else if (!s) html = card(`<h1 class="tv-logo">${esc(UI.title)}</h1><p class="tv-mute">${esc(UI.tvConnected)}</p>`)
   else html = ({
     lobby: vLobby, prompt: vPrompt, pairing: vPairing, deal: vDeal, dilemma: vDilemma,
-    outcome: vOutcome, debrief: vDebrief, scoreboard: vScoreboard, finale_intro: vFinaleIntro,
-    finale: vFinale, final: vFinal,
+    outcome: vOutcome, table_read: vTableRead, debrief: vDebrief, scoreboard: vScoreboard,
+    finale_intro: vFinaleIntro, finale: vFinale, final: vFinal,
   }[s.phase] || (() => ''))()
   // always a way off a table — quiet corner button on every connected screen
   const off = ctx.gid ? `<button class="tv-btn tv-leave" data-act="leave">↩ ${esc(UI.tvNewTable)}</button>` : ''
@@ -354,6 +354,31 @@ function tvScoreRows() {
       <span class="dg">${'🗡'.repeat(s.daggers[p.pub] || 0)}</span>
       <span class="pt">${s.scores[p.pub] || 0}</span>
     </li>`).join('')
+}
+
+// The table read on the big screen: the confession, huge, author hidden —
+// then the reveal. The 'reveal' stinger fires on its own (exposed grew).
+function vTableRead() {
+  const s = ctx.state
+  const tr = s.tableRead
+  if (!tr.text) return card(`
+    <p class="tv-kicker">${esc(UI.bowlKicker)}</p>
+    <div class="tv-dots">…</div>
+    <p class="tv-mute">${esc(UI.bowlFishing)}</p>
+  `)
+  if (tr.revealed) return card(`
+    <p class="tv-kicker">${esc(UI.bowlKicker)}</p>
+    <p class="tv-body">“${esc(tr.text)}”</p>
+    <h1 class="tv-huge">${esc(fill(UI.bowlReveal, { name: nameOf(tr.by) }))}</h1>
+    <p class="tv-quip">${esc(s.quip)}</p>
+  `)
+  const waiting = seated().filter(p => p.pub !== tr.by && !tr.guesses[p.pub]).length
+  return card(`
+    <p class="tv-kicker">${esc(UI.bowlKicker)}</p>
+    <h1 class="tv-huge">“${esc(tr.text)}”</h1>
+    <p class="tv-body">${esc(UI.bowlWho)}</p>
+    <p class="tv-mute">${waiting ? esc(fill(UI.tvGuessing, { n: String(waiting) })) : esc(UI.tvAllIn)}</p>
+  `)
 }
 
 function vScoreboard() {

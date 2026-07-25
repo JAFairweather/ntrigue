@@ -75,6 +75,7 @@ apply({ type: 'start', pub: sarah.pub }, false)                      // only hos
   assert.equal(s.phase, 'prompt')
   assert.ok(content.deck.practice.some(p => p.id === s.promptId), 'warm-up draws from the mild pool')
   const step = (act) => { const n = reduce(s, act, content); assert.notEqual(n, s, `warm-up: ${JSON.stringify(act)}`); s = n }
+  assert.equal(reduce(s, { type: 'bowl', pub: james.pub, round: 0 }, content), s, 'no bowls in the warm-up')
   for (const p of P) step({ type: 'answered', pub: p.pub, round: 0 })
   assert.equal(s.phase, 'pairing')
   assert.deepEqual(s.pairs, pairingsFor(s.players, 1), 'warm-up uses round 1 pattern')
@@ -110,6 +111,10 @@ for (const fl of FLAVORS) {
     `flavor ${fl} draws from its own round-1 pool`)
 }
 assert.equal(reduce(state, { type: 'start', pub: james.pub, flavor: 'nuclear' }, content).flavor, 'mild')
+
+// the bowl is a host toggle, on by default
+assert.equal(reduce(state, { type: 'start', pub: james.pub }, content).bowlOn, true)
+assert.equal(reduce(state, { type: 'start', pub: james.pub, bowl: false }, content).bowlOn, false)
 
 host('start')
 assert.equal(state.phase, 'prompt')
@@ -153,6 +158,13 @@ for (let r = 1; r <= 4; r++) {
     host('redraw')
     assert.notEqual(state.promptId, before)
     apply({ type: 'redraw', pub: james.pub }, false)                  // once per round
+  }
+
+  // R1: James drops his confession in the bowl — opt-in, once, players only
+  if (r === 1) {
+    apply({ type: 'bowl', pub: james.pub, round: 1 })
+    apply({ type: 'bowl', pub: james.pub, round: 1 }, false)          // once
+    apply({ type: 'bowl', pub: stagePub, round: 1 }, false)           // players only
   }
 
   // everyone answers: real encrypted scope + public "answered" action
@@ -225,6 +237,27 @@ for (let r = 1; r <= 4; r++) {
   host('advance')                                                     // outcome pair 2
   assert.equal(state.phase, 'outcome')
   host('advance')
+  if (r === 1) {
+    // the table read: James's entry is the only one in the bowl, so it's drawn;
+    // his phone surfaces the words, the table guesses, courage gets paid
+    assert.equal(state.phase, 'table_read')
+    assert.equal(state.tableRead.by, james.pub)
+    apply({ type: 'whodunit', pub: sarah.pub, owner: james.pub }, false)  // no words yet
+    apply({ type: 'bowl_text', pub: sarah.pub, text: 'imposter' }, false) // drawn author only
+    apply({ type: 'bowl_text', pub: james.pub, text: secretText(james, 1) })
+    assert.equal(state.tableRead.text, secretText(james, 1))
+    apply({ type: 'whodunit', pub: james.pub, owner: sarah.pub }, false)  // author can't guess
+    apply({ type: 'whodunit', pub: sarah.pub, owner: james.pub })         // right: +1
+    apply({ type: 'whodunit', pub: sarah.pub, owner: marco.pub }, false)  // one guess each
+    apply({ type: 'whodunit', pub: priya.pub, owner: marco.pub })         // wrong
+    apply({ type: 'whodunit', pub: marco.pub, owner: sarah.pub })         // wrong → auto-reveal
+    assert.equal(state.tableRead.revealed, true)
+    assert.deepEqual(state.exposed[0],
+      { owner: james.pub, round: 1, text: secretText(james, 1), by: james.pub, how: 'bowl' },
+      'a bowled confession is deliberately, consentedly public')
+    assert.ok(state.quip.includes('James'), 'the reveal quip names the author')
+    host('advance')
+  }
   assert.equal(state.phase, 'scoreboard')
   assert.ok(P.every(p => state.styles[p.pub]), 'everyone always has a style label')
   host('advance')
@@ -239,8 +272,9 @@ assert.equal(state.collected[marco.pub].length, 4)
 assert.equal(Object.keys(james.collected).length, 0)
 assert.equal(Object.keys(marco.collected).length, 4)
 
-// scores after 4 rounds: J 4 (betrayed 3x), S 12, P 12, M 16 (2 🗡)
-assert.deepEqual(P.map(p => state.scores[p.pub]), [4, 12, 12, 16])
+// scores after 4 rounds: J 4 (betrayed 3x) +2 bowl = 6, S 12 +1 right guess
+// = 13, P 12, M 16 (2 🗡)
+assert.deepEqual(P.map(p => state.scores[p.pub]), [6, 13, 12, 16])
 assert.equal(state.daggers[marco.pub], 2)
 assert.equal(state.suffered[james.pub], 3)
 
@@ -252,7 +286,7 @@ assert.deepEqual(state.finale.order, [james.pub, priya.pub, sarah.pub, marco.pub
 
 // turn 1 — James holds nothing: auto-vault (+2), non-humiliating pass
 assert.equal(state.finale.step, 'result')
-assert.equal(state.scores[james.pub], 6)
+assert.equal(state.scores[james.pub], 8)
 host('advance')
 
 // turn 2 — Priya extorts James with his round-1 secret; he refuses; she reveals
@@ -269,7 +303,7 @@ host('advance')
 // turn 3 — Sarah extorts Marco with his round-1 secret; he pays
 apply({ type: 'finale_choice', pub: sarah.pub, action: 'extort', owner: marco.pub, round: 1 })
 apply({ type: 'extort_response', pub: marco.pub, turn: 2, pay: true })
-assert.equal(state.scores[sarah.pub], 15)
+assert.equal(state.scores[sarah.pub], 16)
 assert.equal(state.scores[marco.pub], 13)
 host('advance')
 
@@ -281,7 +315,7 @@ host('advance')
 
 // ---- the reckoning
 assert.equal(state.phase, 'final')
-assert.deepEqual(P.map(p => state.scores[p.pub]), [6, 15, 14, 14])
+assert.deepEqual(P.map(p => state.scores[p.pub]), [8, 16, 14, 14])
 assert.equal(state.ending.villain, 'Marco')
 assert.equal(state.ending.vd, 2)
 assert.equal(state.ending.sucker, 'James')
@@ -334,7 +368,7 @@ for (const p of P) for (let r = 1; r <= 4; r++) {
     assert.ok(!everything.includes(text), `relay must never see: ${text}`)
   }
 }
-assert.equal(exposedTexts.length, 2)
+assert.equal(exposedTexts.length, 3)          // bowl read + blackmail reveal + burn
 const kinds = new Set(relay.events.map(e => e.kind))
 assert.deepEqual([...kinds].sort((a, b) => a - b), [1059, 30078, 30440])
 
@@ -392,4 +426,4 @@ assert.equal(extractJson(undefined), null)
 console.log('sim ok — full game, scores exact, villain/sucker right,')
 console.log('        relay saw ciphertext + wraps + public state only;')
 console.log('        MC inputs provably free of unexposed secrets;')
-console.log(`        ${relay.events.length} events, 2 deliberate reveals, 14 secrets stayed secret.`)
+console.log(`        ${relay.events.length} events, 3 deliberate exposures (bowl · blackmail · burn), 14 secrets stayed secret.`)
