@@ -9,6 +9,11 @@ export function startDevRelay(port = 7777) {
   const store = new Relay()
   const wss = new WebSocketServer({ port })
   const subs = new Map()            // ws -> Map(subId -> filters)
+  const handle = {
+    store,
+    dropOks: 0,                     // test hook: swallow the next N OKs (a silent relay)
+    close: () => wss.close(),
+  }
 
   wss.on('connection', (ws) => {
     subs.set(ws, new Map())
@@ -20,12 +25,18 @@ export function startDevRelay(port = 7777) {
       if (verb === 'EVENT') {
         const event = rest[0]
         try { store.publish(event) } catch { return ws.send(JSON.stringify(['OK', event.id, false, 'invalid'])) }
-        ws.send(JSON.stringify(['OK', event.id, true, '']))
+        if (handle.dropOks > 0) handle.dropOks--
+        else ws.send(JSON.stringify(['OK', event.id, true, '']))
         for (const [sock, m] of subs) for (const [id, filters] of m)
           if (filters.some(f => store.query(f).some(e => e.id === event.id)))
             sock.send(JSON.stringify(['EVENT', id, event]))
       } else if (verb === 'REQ') {
         const [id, ...filters] = rest
+        // strict like relay.primal.net (which we hit live): every filter must
+        // be a plain object. The wrapped-array shape gets primal's NOTICE, so
+        // any regression fails the browser tests instead of shipping.
+        if (filters.some(f => !f || typeof f !== 'object' || Array.isArray(f)))
+          return ws.send(JSON.stringify(['NOTICE', 'ERROR: bad req: provided filter is not an object']))
         subs.get(ws).set(id, filters)
         const seen = new Set()
         for (const f of filters) for (const e of store.query(f))
@@ -36,7 +47,7 @@ export function startDevRelay(port = 7777) {
       }
     })
   })
-  return { store, close: () => wss.close() }
+  return handle
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

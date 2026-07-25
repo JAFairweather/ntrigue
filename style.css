@@ -238,3 +238,10 @@ input:focus, textarea:focus { border-color: var(--gold); }
   background: rgba(34,29,24,.9); border: 1px solid var(--edge);
   color: var(--gold); font-size: .9rem;
 }
+.stall-chip {
+  position: fixed; bottom: 12px; left: 12px; right: 12px;
+  padding: 8px 14px; border-radius: 999px; text-align: center;
+  background: rgba(34,29,24,.94); border: 1px solid var(--hot-dim);
+  color: var(--hot); font-size: .85rem;
+  animation: pulse 2s infinite;
+}
