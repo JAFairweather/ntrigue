@@ -34,6 +34,8 @@ const allPrompts = [
   ...(deck.flavors || [{ rounds: deck.rounds }]).flatMap(f => f.rounds.flatMap(r => r.prompts)),
 ]
 for (const p of allPrompts) check(`deck #${p.id}`, p.text)
+for (const [heat, list] of Object.entries(deck.starters || {}))
+  list.forEach((s, i) => check(`deck starters.${heat}[${i}]`, s))
 
 // 3. every quip variant
 const quips = JSON.parse(await readFile(new URL('../quips.json', import.meta.url)))

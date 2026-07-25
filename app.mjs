@@ -12,7 +12,7 @@ import {
 } from './vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
-import { initialState, reduce, commitHash, flavorRounds, SCHEMA_VERSION, STAGE_STALE_SECS, DEAL_SECS } from './state.mjs'
+import { initialState, reduce, commitHash, flavorRounds, heatFor, multFor, PAYOFF, SCHEMA_VERSION, STAGE_STALE_SECS, DEAL_SECS } from './state.mjs'
 import { UI, MC_UI, BOT, fill } from './copy.mjs'
 import { mcEnabled, mcMode, mcSettings, saveMcSettings, siteConfig, generateDeck, liveQuip, closingRoast } from './mc.mjs'
 
@@ -783,6 +783,11 @@ async function onTap(ev) {
     ctx.ui.bowl = ctx.ui.bowl === false
     return render()
   }
+  if (act === 'starter') {
+    const input = $('#secret-input')
+    if (input) { input.value = el.dataset.text; input.focus() }
+    return
+  }
   if (act === 'bowl')
     return send(`bwl:${s.round}:${ctx.pub}`, { type: 'bowl', round: s.round })
   if (act === 'whodunit')
@@ -941,6 +946,7 @@ const vSheet = () => `<div class="sheet"><div class="sheet-inner">
   <p class="small">· ${esc(UI.howtoTip3)}</p>
   <p class="small">· ${esc(UI.howtoTip4)}</p>
   <p class="small">· ${esc(UI.howtoTip5)}</p>
+  <p class="small">· ${esc(UI.howtoTip6)}</p>
   ${btn(UI.close, 'sheet')}</div></div>`
 
 function vLanding() {
@@ -1014,7 +1020,8 @@ function vLobby() {
       ${ctx.ui.mcDeck && !ctx.ui.generating ? `<p class="mute small">${esc(UI.aiDeckReady)}</p>` : ''}
       <p class="kicker">${esc(UI.flavorTitle)}</p>
       ${[['mild', UI.flavorMild, UI.flavorMildDesc], ['spicy', UI.flavorSpicy, UI.flavorSpicyDesc],
-         ['scorching', UI.flavorScorching, UI.flavorScorchingDesc]].map(([v, label, desc]) => `
+         ['scorching', UI.flavorScorching, UI.flavorScorchingDesc],
+         ['arc', UI.flavorArc, UI.flavorArcDesc]].map(([v, label, desc]) => `
         <button class="stash ${(ctx.ui.flavor || 'mild') === v ? 'sel' : ''}" data-act="flavor" data-v="${v}">
           ${esc(label)}<span class="desc small mute"> — ${esc(desc)}</span>
         </button>`).join('')}
@@ -1070,10 +1077,19 @@ function hostBar(...buttons) {
 const roundKicker = () => {
   const s = ctx.state
   if (s.round === 0) return esc(UI.practiceLabel)
-  const name = flavorRounds(ctx.content, s.flavor).find(r => r.round === s.round)?.name
+  const name = flavorRounds(ctx.content, heatFor(s.flavor, s.round, s.heatBump)).find(r => r.round === s.round)?.name
   return `${esc(fill(UI.roundLabel, { n: String(s.round) }))}${name ? ` · ${esc(name)}` : ''}`
 }
 const coach = (text) => ctx.state.round === 0 ? `<p class="coach">${esc(text)}</p>` : ''
+// the stakes chip: rounds that pay more say so, loudly
+const stakesChip = () => {
+  const m = multFor(ctx.state.round)
+  return m > 1 ? `<p class="kicker hot-text">${esc(m === 2 ? UI.stakesX2 : UI.stakesX3)}</p>` : ''
+}
+const cheatLine = () => {
+  const m = multFor(ctx.state.round)
+  return fill(UI.dilemmaCheat, { t: String(PAYOFF.trade * m), w: String(PAYOFF.betrayWin * m), l: String(PAYOFF.hold * m) })
+}
 
 function vPrompt() {
   const s = ctx.state
@@ -1095,10 +1111,25 @@ function vPrompt() {
       <p class="mute small">${esc(UI.promptYours)}</p>
       <textarea id="secret-input" rows="3" placeholder="${esc(UI.promptPlaceholder)}"></textarea>
       ${btn(UI.promptLock, 'lock-secret', '', 'btn hot big')}
+      ${vStarters()}
       <p class="mute small">${esc(UI.phonesDown)}</p>`}
   `) + hostBar(
     btn(UI.hostEveryoneIn, 'host', 'data-t="override"', 'btn ghost'),
     s.redrawsLeft ? btn(UI.hostRedraw, 'host', 'data-t="redraw"', 'btn ghost') : '')
+}
+
+// blank-box assist: a few tappable starters so no one stalls staring at an
+// empty field — tap fills the box, then make it yours
+function vStarters() {
+  const s = ctx.state
+  const pool = ctx.content.deck.starters?.[heatFor(s.flavor, s.round || 1, s.heatBump)]
+  if (!pool?.length) return ''
+  const off = (s.round * 3) % pool.length
+  const picks = [0, 1, 2].map(i => pool[(off + i) % pool.length])
+  return `
+    <p class="mute small">${esc(UI.starterLabel)}</p>
+    <div class="stash-list">${picks.map(t =>
+      `<button class="stash small" data-act="starter" data-text="${esc(t)}">${esc(t)}</button>`).join('')}</div>`
 }
 
 function vPairing() {
@@ -1111,6 +1142,7 @@ function vPairing() {
   const out = seated().filter(p => !s.pairs.flat().includes(p.pub))
   return vCard(`
     <p class="kicker">${roundKicker()} · ${esc(UI.pairingTitle)}</p>
+    ${stakesChip()}
     ${cards}
     ${other ? `<p class="locked">${esc(fill(UI.yourMatch, { name: nameOf(other) }))}</p>` : ''}
     ${out.map(p => `<p class="mute small">${esc(fill(UI.sittingOut, { name: p.name }))}</p>`).join('')}
@@ -1129,6 +1161,7 @@ function vDeal() {
     hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
   return vCard(`
     <p class="kicker">${roundKicker()}</p>
+    ${stakesChip()}
     <h2>${esc(fill(UI.dealTitle, { name: nameOf(other) }))}</h2>
     <p class="mute">${esc(UI.dealHint)}</p>
     <div class="timer ${left <= 5 ? 'hot-t' : ''}">${left || '…'}</div>
@@ -1148,6 +1181,7 @@ function vDilemma() {
   const committed = s.commits[ctx.pub] || ctx.local.pending[s.round]
   return vCard(`
     <p class="kicker">${roundKicker()}</p>
+    ${stakesChip()}
     <h2>${esc(fill(UI.dilemmaVs, { name: nameOf(other) }))}</h2>
     <p class="stakes">${esc(fill(UI.dilemmaStakes, { name: nameOf(other) }))}</p>
     ${s.promises[other] ? `<p class="quip">${esc(fill(UI.dealTheirPromise, { name: nameOf(other) }))}</p>` : ''}
@@ -1160,7 +1194,7 @@ function vDilemma() {
         <button class="btn choice hold" data-act="choose" data-choice="HOLD">${esc(UI.dilemmaHold)}</button>
       </div>
       <details class="cheat" ${s.round === 0 ? 'open' : ''}><summary class="mute small">${esc(UI.dilemmaMath)}</summary>
-        <p class="mute small">${esc(UI.dilemmaCheat)}</p></details>`}
+        <p class="mute small">${esc(cheatLine())}</p></details>`}
   `, 'center') + hostBar(btn(UI.hostForce, 'host', 'data-t="force"', 'btn ghost'))
 }
 
@@ -1234,12 +1268,21 @@ function vTableRead() {
   `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn ghost'))
 }
 
+// "turn it up 🌶️": offered between rounds while there's still a hotter rung
+// and rounds left to feel it
+const heatUpBtn = () => {
+  const s = ctx.state
+  const can = s.round < 4 && s.heatBump < 2 &&
+    (s.flavor === 'arc' || heatFor(s.flavor, s.round + 1, s.heatBump) !== 'scorching')
+  return can ? btn(UI.heatUp, 'host', 'data-t="heat_up"', 'btn ghost') : ''
+}
+
 function vDebrief() {
   return vCard(`
     <h2>${esc(UI.debriefTitle)}</h2>
     <p>${esc(UI.debriefBody)}</p>
     <p class="quip">${esc(UI.debriefReset)}</p>
-  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+  `, 'center') + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'), heatUpBtn())
 }
 
 function scoreRows() {
@@ -1260,7 +1303,7 @@ function vScoreboard() {
     <ul class="scores">${scoreRows()}</ul>
     <p class="mute small">${esc(UI.daggerLegend)}</p>
     <p class="quip">${esc(s.quip)}</p>
-  `) + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'))
+  `) + hostBar(btn(UI.hostNext, 'host', 'data-t="advance"', 'btn hot'), heatUpBtn())
 }
 
 function vFinaleIntro() {

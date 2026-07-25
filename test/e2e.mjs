@@ -120,6 +120,8 @@ for (let r = 1; r <= 4; r++) {
   for (const name of (r === 2 ? ['Marco', 'James', 'Sarah', 'Priya'] : NAMES)) {
     const page = pages[name]
     await see(page, `Round ${r}`)
+    if (r === 1 && name === 'James')
+      await see(page, 'Steal one')                   // blank-box assist on offer
     await page.locator('#secret-input').fill(`${name} secret r${r}`, T)
     await tap(page, 'Lock it in')
     if (r === 2 && name === 'Marco') {
@@ -130,6 +132,8 @@ for (let r = 1; r <= 4; r++) {
   await see(james, 'matchups')
   await tap(james, 'Next')
   await see(james, 'Talk it out')                    // the deal window opens every round
+  if (r === 3) await see(tv, '×2 STAKES')            // the stakes climb, visibly
+  if (r === 4) await see(james, '×3 STAKES')         // the money round announces itself
   if (r === 3) {                                     // Marco makes a promise he won't keep
     await tap(marco, 'I’ll share')
     await see(marco, 'You told the table')
@@ -178,8 +182,9 @@ for (let r = 1; r <= 4; r++) {
   await tap(james, 'Next')
 }
 
-// ---- finale, last place first: James(10), Priya(12, seat tie-break),
-// Sarah(12), Marco(14). Covers every finale surface: extort → refuse →
+// ---- finale, last place first with ×1/×1/×2/×3 stakes: James(17),
+// Priya(21, seat tie-break), Sarah(21), Marco(27, incl. +2 bowl).
+// Covers every finale surface: extort → refuse →
 // public reveal, two vaults, and a burn.
 await see(james, 'BLACKMAIL FINALE')
 await tap(james, 'Begin')
@@ -235,10 +240,10 @@ assert.equal(relay.store.query({ kinds: [1059], '#p': [stagePub] }).length, 0,
 // trades +3; R3 betrayal: Marco +5 / James +1; Marco's bowl read +2 (all
 // guesses wrong); finale: reveal +2, vaults +2, burn +1
 const score = async (page, name) => Number(await page.locator('.score-row', { hasText: name }).first().locator('.pts').textContent(T))
-assert.equal(await score(james, 'James'), 3 + 3 + 1 + 3 + 2)
-assert.equal(await score(james, 'Marco'), 3 + 3 + 5 + 3 + 1 + 2)
-assert.equal(await score(james, 'Sarah'), 3 * 4 + 2)
-assert.equal(await score(james, 'Priya'), 3 * 4 + 2)
+assert.equal(await score(james, 'James'), 3 + 3 + 1 * 2 + 3 * 3 + 2)
+assert.equal(await score(james, 'Marco'), 3 + (3 + 2) + 5 * 2 + 3 * 3 + 1)
+assert.equal(await score(james, 'Sarah'), 3 + 3 + 3 * 2 + 3 * 3 + 2)
+assert.equal(await score(james, 'Priya'), 3 + 3 + 3 * 2 + 3 * 3 + 2)
 
 // ---- refresh-rejoin: a player reloads and lands back at the final card
 await sarah.reload()
