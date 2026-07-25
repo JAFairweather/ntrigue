@@ -38,6 +38,8 @@ const NAMES = ['James', 'Sarah', 'Priya', 'Marco']
 const pages = {}
 for (const name of NAMES) {
   const context = await browser.newContext({ viewport: { width: 390, height: 720 } })
+  // skip the Nave landing intro — it overlays the app and eats every tap
+  await context.addInitScript(() => sessionStorage.setItem('naveIntroSeen', '1'))
   const page = await context.newPage()
   page.on('pageerror', (e) => errors.push(`${name}: ${e.message}`))
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`${name} console: ${m.text()}`) })
