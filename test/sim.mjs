@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import { generateSecretKey, getPublicKey, bytesToHex } from '../vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from '../nipxx.mjs'
-import { initialState, reduce, commitHash, pairingsFor, roomCode, ARCHETYPES, flavorRounds, FLAVORS, heatFor } from '../state.mjs'
+import { initialState, reduce, commitHash, pairingsFor, roomCode, ARCHETYPES, flavorRounds, FLAVORS, heatFor, partnerRound } from '../state.mjs'
 import { buildDeckInput, buildPublicLog, buildQuipInput, buildRoastInput, toDeckShape, extractJson } from '../mc.mjs'
 import { Relay } from './relay.mjs'
 
@@ -68,7 +68,7 @@ apply({ type: 'start', pub: sarah.pub }, false)                      // only hos
 // ---- warm-up round (round 0): the full loop on a fork of the lobby state —
 // mild pool, R1 pairing pattern, points visibly land, then the debrief wipes
 {
-  let s = reduce(state, { type: 'start', pub: james.pub, practice: true }, content)
+  let s = reduce(state, { type: 'start', pub: james.pub, practice: true, shape: 'couples' }, content)
   assert.notEqual(s, state)
   assert.equal(s.round, 0)
   assert.equal(s.practice, true)
@@ -129,7 +129,13 @@ assert.equal(reduce(state, { type: 'start', pub: james.pub, bowl: false }, conte
   assert.equal(heatFor('scorching', 1, 2), 'scorching')  // capped at the top
 }
 
-host('start')
+// ---- group shape: the lobby asks who's at the table; couples is an opt-in
+assert.equal(reduce(state, { type: 'start', pub: james.pub }, content).groupShape, 'friends',
+  'nobody is assumed to be a couple')
+assert.equal(reduce(state, { type: 'start', pub: james.pub, shape: 'throuple' }, content).groupShape, 'friends')
+assert.equal(reduce(state, { type: 'start', pub: james.pub, shape: 'couples' }, content).groupShape, 'couples')
+
+apply({ type: 'start', pub: james.pub, shape: 'couples' })           // this table IS two couples
 assert.equal(state.phase, 'prompt')
 assert.equal(state.round, 1)
 assert.equal(state.flavor, 'mild')                                   // the very-playable default
@@ -139,12 +145,23 @@ assert.deepEqual(pairingsFor(state.players, 1), [[james.pub, priya.pub], [sarah.
 assert.deepEqual(pairingsFor(state.players, 2), [[james.pub, sarah.pub], [priya.pub, marco.pub]])
 assert.deepEqual(pairingsFor(state.players, 3), [[james.pub, marco.pub], [sarah.pub, priya.pub]])
 assert.deepEqual(pairingsFor(state.players, 4), pairingsFor(state.players, 2))
+// a friends table: no forced partner rounds — three distinct matchups, then
+// round 4 replays the opening as the rematch
+{
+  const key = (pairs) => JSON.stringify(pairs.map(p => [...p].sort()).sort())
+  const rounds = [1, 2, 3, 4].map(r => pairingsFor(state.players, r, 'friends'))
+  assert.equal(new Set(rounds.slice(0, 3).map(key)).size, 3, 'friends: R1-R3 all different')
+  assert.equal(key(rounds[3]), key(rounds[0]), 'friends: R4 is the opening rematch')
+  assert.equal(partnerRound(2, 'couples'), true)
+  assert.equal(partnerRound(2, 'friends'), false, 'friends tables get no couple framing')
+  assert.equal(partnerRound(4, 'friends'), false)
+}
 for (const n of [3, 5, 6]) {                                          // other counts: sane rounds
   const fake = Array.from({ length: n }, (_, i) => ({ pub: `p${i}`, seat: i + 1 }))
-  for (let r = 1; r <= 4; r++) {
-    const pairs = pairingsFor(fake, r)
+  for (const shape of ['couples', 'friends']) for (let r = 1; r <= 4; r++) {
+    const pairs = pairingsFor(fake, r, shape)
     const flat = pairs.flat()
-    assert.equal(new Set(flat).size, flat.length, `no dup in n=${n} r=${r}`)
+    assert.equal(new Set(flat).size, flat.length, `no dup in n=${n} r=${r} (${shape})`)
     assert.equal(flat.length, n - (n % 2 === 0 ? 0 : 1))
   }
 }

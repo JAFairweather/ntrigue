@@ -814,6 +814,7 @@ async function onTap(ev) {
     return send(`host:start:${now()}`, {
       type: 'start', practice: ctx.ui.practice !== false,
       flavor: ctx.ui.flavor || 'mild', bowl: ctx.ui.bowl !== false,
+      shape: ctx.ui.shape || 'friends',
     })
   }
   if (act === 'practice-toggle') {
@@ -835,6 +836,10 @@ async function onTap(ev) {
     return send(`who:${s.round}:${ctx.pub}`, { type: 'whodunit', round: s.round, owner: el.dataset.pub })
   if (act === 'flavor') {
     ctx.ui.flavor = el.dataset.v
+    return render()
+  }
+  if (act === 'shape') {
+    ctx.ui.shape = el.dataset.v
     return render()
   }
   if (act === 'bot-add') return addBot()
@@ -996,7 +1001,7 @@ const vSheet = () => `<div class="sheet"><div class="sheet-inner">
   <p class="small">· ${esc(UI.howtoTip1)}</p>
   <p class="small">· ${esc(UI.howtoTip2)}</p>
   <p class="small">· ${esc(UI.howtoTip3)}</p>
-  <p class="small">· ${esc(UI.howtoTip4)}</p>
+  ${ctx.state?.groupShape === 'couples' ? `<p class="small">· ${esc(UI.howtoTip4)}</p>` : ''}
   <p class="small">· ${esc(UI.howtoTip5)}</p>
   <p class="small">· ${esc(UI.howtoTip6)}</p>
   ${btn(UI.close, 'sheet')}</div></div>`
@@ -1063,7 +1068,8 @@ function vLobby() {
       <p class="small">${esc(UI.howtoFin1)} ${esc(UI.howtoFin2)} ${esc(UI.howtoFin3)}</p>
       <p class="small mute">${esc(UI.briefMore)}</p>`}
     <p class="mute">${esc(fill(UI.lobbySeated, { n: String(s.players.length) }))}</p>
-    ${ctx.isHost && s.players.length > 1 ? `<p class="small mute">${esc(UI.lobbySeatHint)}</p>` : ''}
+    ${ctx.isHost && s.players.length > 1 ? `<p class="small mute">${esc(
+      (ctx.ui.shape || 'friends') === 'couples' ? UI.lobbySeatHint : UI.lobbySeatHintFriends)}</p>` : ''}
     <ul class="seats">${rows || `<li class="mute">${esc(UI.lobbyWaiting)}</li>`}</ul>
     ${ctx.isHost && s.players.length < 6 ? `
       ${btn(UI.botAdd, 'bot-add', '', 'btn ghost')}
@@ -1072,6 +1078,12 @@ function vLobby() {
       ${btn(mcEnabled() ? UI.aiOn : UI.aiSetup, 'mc-open', '', 'btn ghost')}
       ${ctx.ui.generating ? `<p class="quip">${esc(UI.aiGenerating)}</p>` : ''}
       ${ctx.ui.mcDeck && !ctx.ui.generating ? `<p class="mute small">${esc(UI.aiDeckReady)}</p>` : ''}
+      <p class="kicker">${esc(UI.groupTitle)}</p>
+      ${[['friends', UI.groupFriends, UI.groupFriendsDesc],
+         ['couples', UI.groupCouples, UI.groupCouplesDesc]].map(([v, label, desc]) => `
+        <button class="stash ${(ctx.ui.shape || 'friends') === v ? 'sel' : ''}" data-act="shape" data-v="${v}">
+          ${esc(label)}<span class="desc small mute"> — ${esc(desc)}</span>
+        </button>`).join('')}
       <p class="kicker">${esc(UI.flavorTitle)}</p>
       ${[['mild', UI.flavorMild, UI.flavorMildDesc], ['spicy', UI.flavorSpicy, UI.flavorSpicyDesc],
          ['scorching', UI.flavorScorching, UI.flavorScorchingDesc],

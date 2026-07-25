@@ -96,6 +96,9 @@ if (process.env.SNAP) await tv.screenshot({ path: process.env.SNAP })
 }
 await see(sarah, '📺')                               // phones flag the stage
 await see(james, 'Warm-up round: on')                // practice defaults on
+await see(james, 'Who’s at the table?')              // group shape asked, friends default
+await tap(james, 'Couples')                          // this fixture IS two couples
+await see(james, 'couples side by side')             // the seat hint follows the answer
 await see(james, 'Tonight’s menu')                   // flavor picker, innocent default
 await tap(james, 'Spicy')                            // pick the classic deck tonight
 await tap(james, 'Start the night')
