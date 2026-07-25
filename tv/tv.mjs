@@ -6,7 +6,7 @@
 
 import { generateSecretKey, getPublicKey, bytesToHex, hexToBytes, qrfactory } from '../vendor/nostr-tools.js'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, findGameByCode } from '../net.mjs'
-import { SCHEMA_VERSION, STAGE_PING_SECS, DEAL_SECS, flavorRounds, heatFor, multFor, unspentOf } from '../state.mjs'
+import { SCHEMA_VERSION, STAGE_PING_SECS, DEAL_SECS, flavorRounds, heatFor, multFor, unspentOf, reactionBeat } from '../state.mjs'
 import { UI, fill, storyLine, AWARD_TITLES } from '../copy.mjs'
 
 const $ = (sel) => document.querySelector(sel)
@@ -144,7 +144,37 @@ function applyState(event) {
   const prev = ctx.state
   ctx.state = s
   stingers(prev, s)
+  reactionFx(s)
   render()
+}
+
+// ---------------------------------------------------------------- reactions
+// New taps burst up the screen; the tally lives on the reveal card itself.
+let fxKey = null, fxSeen = {}
+function reactionFx(s) {
+  const key = s.reactions?.key
+  if (key !== fxKey) { fxKey = key; fxSeen = {} }
+  if (!s.reactions || key !== reactionBeat(s)) return
+  for (const [e, n] of Object.entries(s.reactions.counts)) {
+    for (let i = fxSeen[e] || 0; i < n; i++) burstEmoji(e)
+    fxSeen[e] = n
+  }
+}
+function burstEmoji(e) {
+  let layer = document.getElementById('fx')
+  if (!layer) { layer = document.createElement('div'); layer.id = 'fx'; document.body.appendChild(layer) }
+  const span = document.createElement('span')
+  span.textContent = e
+  span.style.left = (8 + Math.random() * 84) + 'vw'
+  span.style.animationDelay = (Math.random() * 0.3) + 's'
+  layer.appendChild(span)
+  setTimeout(() => span.remove(), 3000)
+}
+const tvTally = () => {
+  const s = ctx.state
+  const counts = s.reactions?.key === reactionBeat(s) ? s.reactions.counts : {}
+  const parts = Object.entries(counts).map(([e, n]) => `${e}×${n}`)
+  return parts.length ? `<p class="tv-tally">${esc(parts.join('  '))}</p>` : ''
 }
 
 // ---------------------------------------------------------------- sound
@@ -348,6 +378,7 @@ function vOutcome() {
     <h1 class="tv-huge ${o.kind === 'betrayal' ? 'hot-text' : ''}">${esc(headline)}</h1>
     ${(o.broken || []).map(p => `<p class="tv-body hot-text">${esc(fill(UI.promiseBroken, { name: nameOf(p) }))}</p>`).join('')}
     <p class="tv-quip">${esc(o.quip)}</p>
+    ${tvTally()}
   `)
 }
 
@@ -378,6 +409,7 @@ function vTableRead() {
     <p class="tv-body">“${esc(tr.text)}”</p>
     <h1 class="tv-huge">${esc(fill(UI.bowlReveal, { name: nameOf(tr.by) }))}</h1>
     <p class="tv-quip">${esc(s.quip)}</p>
+    ${tvTally()}
   `)
   const waiting = seated().filter(p => p.pub !== tr.by && !tr.guesses[p.pub]).length
   return card(`
@@ -446,7 +478,7 @@ function vFinale() {
       <p class="secret">${esc(x.text)}</p>
       <p class="tv-mute">${esc(UI.cantUntell)}</p></div>`
   }
-  return card(`<p class="tv-quip" style="font-size:6vh">${esc(s.quip)}</p>${body}`)
+  return card(`<p class="tv-quip" style="font-size:6vh">${esc(s.quip)}</p>${body}${tvTally()}`)
 }
 
 function vFinal() {

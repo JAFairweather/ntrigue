@@ -224,6 +224,19 @@ for (let r = 1; r <= 4; r++) {
   if (r === 1) {
     assert.deepEqual(state.outcomes[0].broken, [priya.pub], 'a promise followed by a HOLD is called out')
     assert.equal(state.outcomes[1].broken, undefined, 'a kept promise passes without comment')
+
+    // the room reacts to the reveal: players only, rail emoji only, taps
+    // stack — and (on a fork) a new card starts a clean slate on its own
+    apply({ type: 'react', pub: sarah.pub, emoji: '😱' })
+    apply({ type: 'react', pub: sarah.pub, emoji: '😱' })
+    apply({ type: 'react', pub: marco.pub, emoji: '🐍' })
+    apply({ type: 'react', pub: stagePub, emoji: '😱' }, false)      // spectators can't
+    apply({ type: 'react', pub: marco.pub, emoji: '🙃' }, false)     // rail emoji only
+    assert.deepEqual(state.reactions.counts, { '😱': 2, '🐍': 1 })
+    const card2 = reduce(state, { type: 'advance', pub: james.pub }, content)
+    const fresh = reduce(card2, { type: 'react', pub: priya.pub, emoji: '🔥' }, content)
+    assert.notEqual(fresh.reactions.key, state.reactions.key, 'a new card is a new beat')
+    assert.deepEqual(fresh.reactions.counts, { '🔥': 1 }, 'the old gasp is gone')
   }
   if (r === 2) assert.deepEqual(state.promises, {}, 'promises reset each round')
 
