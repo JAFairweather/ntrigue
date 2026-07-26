@@ -42,9 +42,16 @@ const quips = JSON.parse(await readFile(new URL('../quips.json', import.meta.url
 for (const [k, list] of Object.entries(quips.quips))
   list.forEach((q, i) => check(`quips ${k}[${i}]`, q))
 
-// 4. visible text of the game page (tags stripped; about.html exempt)
+// 4. visible text of the game page (tags stripped). Two deliberate
+// exemptions, same rationale: about.html credits the tech, and the Nave
+// intro splash (#nave-intro, dismissed before the game is ever visible)
+// IS the protocol's front-door introduction — it quotes and links Nostr
+// on purpose (#37). The game's own screens stay under the rule.
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8')
 const visible = html
+  .replace(/<!--[\s\S]*?-->/g, ' ')          // comments aren't visible text
+  .replace(/<div id="nave-intro"[\s\S]*?<\/script>/i, '')
+  .replace(/<style[\s\S]*?<\/style>/gi, ' ') // neither are stylesheets
   .replace(/<script[\s\S]*?<\/script>/gi, '')
   .replace(/<[^>]+>/g, ' ')
 check('index.html', visible)
