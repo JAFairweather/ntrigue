@@ -54,9 +54,27 @@ for (let r = 1; r <= 4; r++) {
     await host.waitFor(s => s.promises[named.Marco.pub])
   }
   await host.advance()                                 // → dilemma
-  for (const [name, e] of Object.entries(named)) {
-    await e.waitFor(s => s.phase === 'dilemma')
-    await e.choose(script[r][name])
+  if (r === 1) {
+    // early hand-over (playtest feedback): James SHAREs into Priya's HOLD.
+    // The moment HIS reveal is public his engine grants — so Priya holds
+    // his words while the round is still undecided (Marco hasn't moved).
+    for (const name of ['James', 'Sarah', 'Priya']) {
+      await named[name].waitFor(s => s.phase === 'dilemma')
+      await named[name].choose(script[1][name])
+    }
+    await host.waitFor(s => s.choices[host.pub] === 'SHARE')
+    for (let i = 0; i < 60 && !priya.collected[`${host.pub}:1`]; i++)
+      await new Promise(res => setTimeout(res, 250))
+    assert.equal(host.state.phase, 'dilemma', 'the round is still open…')
+    assert.equal(priya.collected[`${host.pub}:1`], 'James secret r1',
+      '…but the shared secret already crossed — no waiting on "Opening…"')
+    await named.Marco.waitFor(s => s.phase === 'dilemma')
+    await named.Marco.choose(script[1].Marco)
+  } else {
+    for (const [name, e] of Object.entries(named)) {
+      await e.waitFor(s => s.phase === 'dilemma')
+      await e.choose(script[r][name])
+    }
   }
   await host.waitFor(s => s.phase === 'outcome')
   if (r === 3) assert.ok(host.state.outcomes.some(o => o.broken?.length), 'the broken promise is marked')
