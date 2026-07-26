@@ -1,8 +1,7 @@
-// app.mjs — the Ntrigue client. One file, three jobs:
-//   render:  paint the current phase from the latest game state
-//   player:  answer prompts (as 30440 scopes), commit/reveal choices,
-//            trade secrets (as 440 grants), play the finale
-//   host:    fold action events through the reducer and re-publish state
+// app.mjs — the Ntrigue VIEW. Rendering, taps, and the robot guests live
+// here; everything else — host duties, retries, trades, transport — is the
+// shared headless engine (engine.mjs, issue #31), so phase logic exists in
+// exactly one place and phones and headless seats behave identically.
 //
 // Everything a player sees comes from copy.mjs / deck.json / quips.json —
 // keep it that way; test/banned-words.mjs scans those files.
@@ -11,8 +10,9 @@ import {
   generateSecretKey, getPublicKey, bytesToHex, hexToBytes, qrfactory,
 } from './vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
-import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
-import { initialState, reduce, commitHash, flavorRounds, heatFor, multFor, unspentOf, PAYOFF, REACTIONS, reactionBeat, SCHEMA_VERSION, STAGE_STALE_SECS, DEAL_SECS } from './state.mjs'
+import { Net, KIND_APP, DEFAULT_RELAYS, dState, now, findGameByCode } from './net.mjs'
+import { commitHash, flavorRounds, heatFor, multFor, unspentOf, PAYOFF, REACTIONS, reactionBeat, DEAL_SECS } from './state.mjs'
+import { Engine } from './engine.mjs'
 import { UI, MC_UI, BOT, fill, storyLine, AWARD_TITLES } from './copy.mjs'
 import { mcEnabled, mcMode, mcSettings, saveMcSettings, siteConfig, generateDeck, liveQuip, closingRoast } from './mc.mjs'
 
@@ -23,16 +23,17 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
 // ---------------------------------------------------------------- context
 
 const ctx = {
+  engine: null,         // the seat at the table — all game I/O goes through it
   gid: null, relays: DEFAULT_RELAYS, hostPub: null,
-  sk: null, pub: null, name: null, isHost: false,
-  net: null, content: null,
-  state: null,
-  local: null,          // persisted per-game client data (see defaults below)
+  pub: null, name: null, isHost: false,
+  content: null,
   beats: {},            // drama-beat timers already fired, by card key
   sheet: false,         // scoring sheet open
   ui: {},               // transient view flags (card flip, join draft…)
-  unsubs: [],
 }
+// the view reads game state and per-game client data straight off the engine
+Object.defineProperty(ctx, 'state', { get: () => ctx.engine?.state ?? null })
+Object.defineProperty(ctx, 'local', { get: () => ctx.engine?.local ?? {} })
 
 const localDefaults = () => ({
   sk: null, name: null, isHost: false, hostPub: null, relays: DEFAULT_RELAYS,
@@ -45,7 +46,7 @@ const localDefaults = () => ({
 })
 
 const lsKey = () => `ntg:${ctx.gid}`
-const saveLocal = () => localStorage.setItem(lsKey(), JSON.stringify(ctx.local))
+const saveLocal = () => localStorage.setItem(lsKey(), JSON.stringify(ctx.engine.local))
 const loadLocal = () => {
   try { return { ...localDefaults(), ...JSON.parse(localStorage.getItem(lsKey()) || 'null') } }
   catch { return localDefaults() }
@@ -102,14 +103,14 @@ async function main() {
 
 async function enterGame({ gid, relays, hostPub }) {
   ctx.gid = gid
-  ctx.local = loadLocal()
-  ctx.relays = relays?.length ? relays : (ctx.local.relays || DEFAULT_RELAYS)
-  ctx.hostPub = hostPub || ctx.local.hostPub
-  if (!ctx.local.sk) { ctx.local.sk = bytesToHex(generateSecretKey()); saveLocal() }
-  ctx.sk = hexToBytes(ctx.local.sk)
-  ctx.pub = getPublicKey(ctx.sk)
-  ctx.name = ctx.local.name
-  ctx.isHost = ctx.local.isHost || ctx.pub === ctx.hostPub
+  const local = loadLocal()
+  ctx.relays = relays?.length ? relays : (local.relays || DEFAULT_RELAYS)
+  ctx.hostPub = hostPub || local.hostPub
+  if (!local.sk) local.sk = bytesToHex(generateSecretKey())
+  const sk = hexToBytes(local.sk)
+  ctx.pub = getPublicKey(sk)
+  ctx.name = local.name
+  ctx.isHost = local.isHost || ctx.pub === ctx.hostPub
   if (ctx.isHost) {
     // restore a generated deck across refreshes — host-local only, per spec
     try {
@@ -120,87 +121,43 @@ async function enterGame({ gid, relays, hostPub }) {
       }
     } catch { /* fall back to the static deck */ }
   }
-  ctx.net = new Net(ctx.relays)
+
+  // the engine is the seat: host duties, retries, trades, transport. The
+  // view hands it the persisted per-game data and saves on every mutation.
+  ctx.engine = new Engine({
+    gid, relays: ctx.relays, hostPub: ctx.hostPub, sk,
+    content: ctx.content, local,
+    onLocal: () => saveLocal(),
+    restoreState: ctx.isHost ? local.lastState : null,
+  })
+  ctx.engine.isHost = ctx.isHost      // a restored host key may differ from #h
+  saveLocal()
   render()                            // connecting / join screen immediately
 
-  // latest state: remote wins, host's local copy as fallback
-  const [remote] = await ctx.net.query({
-    kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)],
-  }).catch(() => [])
-  if (remote) applyStateEvent(remote)
-  else if (ctx.isHost && ctx.local.lastState) ctx.state = ctx.local.lastState
-  else if (ctx.isHost) ctx.state = initialState({ gid: ctx.gid, host: ctx.pub, relays: ctx.relays })
-  if (ctx.isHost) await hostCatchUp()
-
-  subscribeAll()
-  if (ctx.isHost && !remote) { await publishState(); netSelfCheck() }
-  refreshCollected()
+  const fresh = ctx.isHost && !local.lastState
+  await ctx.engine.connect()
+  ctx.engine.onChange((s, prev) => {
+    botTick()
+    if (prev && ctx.isHost) maybeMc(prev, s)
+    render()
+  })
+  if (fresh && ctx.state?.players.length === 0) netSelfCheck()
+  ctx.engine.refreshCollected()
   render()
-  setInterval(tick, 1000)             // soft timers + retries + stage watchdog
-  // returning to the foreground: sockets may be dead — fetch and flush now
+  setInterval(tick, 1000)             // countdown repaints + robot guests
+  // returning to the foreground: the engine fetches and flushes everything owed
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return
-    pollNet().catch(console.error)
-    deliverAnswer().catch(console.error)
-    autoEffects().catch(console.error)
-    refreshCollected()
+    ctx.engine.wake().then(render)
   })
 }
 
-// ---------------------------------------------------------------- host driver
+// ---------------------------------------------------------------- host-side hooks
+// The engine owns the host driver; the view keeps only what needs the DOM
+// (or the MC key). hostApply drives the reducer locally — robot guests and
+// MC upgrades ride the same door the engine's own host duties use.
 
-let seenStateTs = 0
-function applyStateEvent(event) {
-  if (event.pubkey !== ctx.hostPub || event.created_at < seenStateTs) return
-  let s
-  try { s = JSON.parse(event.content) } catch { return }
-  if (!s || s.v !== SCHEMA_VERSION || s.gid !== ctx.gid) return
-  seenStateTs = event.created_at
-  ctx.state = s
-  onStateChanged()
-}
-
-// The host applies its own actions locally at tap time, so both the catch-up
-// query and the live feed skip host-authored events — replaying a non-
-// idempotent 'advance' would double-step the game.
-async function hostCatchUp() {
-  const events = await ctx.net.query({ kinds: [KIND_APP], '#t': [ctx.gid] }).catch(() => [])
-  let changed = false
-  for (const e of events.sort((a, b) => a.created_at - b.created_at)) {
-    if (e.pubkey === ctx.pub) continue
-    const act = parseAction(ctx.gid, e)
-    if (!act) continue
-    const prev = ctx.state
-    const next = reduce(prev, act, ctx.content)
-    if (next === prev) continue
-    if (next.phase !== prev.phase || next.outcomeStep !== prev.outcomeStep ||
-        next.finale?.turn !== prev.finale?.turn || next.finale?.step !== prev.finale?.step)
-      next.phaseAt = now()
-    ctx.state = next
-    changed = true
-  }
-  if (changed) await publishState()
-  return changed
-}
-
-function hostIngest(event) {
-  if (event.pubkey === ctx.pub) return
-  const act = parseAction(ctx.gid, event)
-  if (act) hostApply(act)
-}
-
-async function hostApply(act) {
-  const prev = ctx.state
-  const next = reduce(prev, act, ctx.content)
-  if (next === prev) return
-  if (next.phase !== prev.phase || next.outcomeStep !== prev.outcomeStep ||
-      next.finale?.turn !== prev.finale?.turn || next.finale?.step !== prev.finale?.step)
-    next.phaseAt = now()
-  ctx.state = next
-  onStateChanged()
-  await publishState()
-  maybeMc(prev, next)
-}
+const hostApply = (act) => ctx.engine.applyLocal(act)
 
 // ---- AI MC hooks (host only): fire-and-forget upgrades of prewritten
 // content. Every path already shipped a template; a generated line that
@@ -239,29 +196,11 @@ function maybeMc(prev, s) {
   }
 }
 
-async function publishState() {
-  ctx.local.lastState = ctx.state
-  saveLocal()
-  // dSuffix 'state' yields exactly dState(gid); parseAction ignores it, so
-  // the host never re-ingests its own state as an action. The `c` tag makes
-  // the game findable by its 4-letter room code (TV + code join).
-  // A push nobody accepted must not stall silently: flag it, show the chip,
-  // and let the tick loop keep re-sending (replacement, never duplication —
-  // same d tag, strictly increasing created_at) until a relay confirms.
-  try {
-    await sendAction(ctx.net, ctx.sk, ctx.gid, 'state', ctx.state, [codeTag(ctx.state.code)])
-    if (ctx.ui.netStall) { ctx.ui.netStall = false; render() }
-  } catch (e) {
-    console.error('state push failed', e.detail || e)
-    if (!ctx.ui.netStall) { ctx.ui.netStall = true; render() }
-  }
-}
-
 // One-shot connection self-check after game creation: publish went through,
 // but can it be read back? If not, friends' phones won't find the table.
 async function netSelfCheck() {
   await new Promise(r => setTimeout(r, 2500))
-  const [back] = await ctx.net.query({
+  const [back] = await ctx.engine.net.query({
     kinds: [KIND_APP], authors: [ctx.pub], '#d': [dState(ctx.gid)],
   }).catch(() => [])
   ctx.ui.netWarn = !back
@@ -269,190 +208,13 @@ async function netSelfCheck() {
 }
 
 // ---------------------------------------------------------------- actions
+// Every tap funnels through the engine with the same idempotent action ids
+// the headless seats use; retries, reveals, and trade deliveries are the
+// engine's problem now.
 
-async function send(dSuffix, payload) {
-  if (ctx.isHost) await hostApply({ ...payload, pub: ctx.pub })   // snappy local apply
-  try { await sendAction(ctx.net, ctx.sk, ctx.gid, dSuffix, payload) }
-  catch (e) { console.error('send failed', e) }
-}
-
-// ---------------------------------------------------------------- state-change effects
-
-function onStateChanged() {
-  autoEffects().catch(console.error)
-  deliverAnswer().catch(console.error)
-  botTick()
-  render()
-}
-
-// Push my locked answers to the table. Two independent debts, both retried
-// until confirmed: the sealed copy of each secret (any round — a refusal
-// must never stall the night), and the done flag for the current prompt.
-// Idempotent and re-entrant-safe — called from the tap, from every state
-// change, on returning to the foreground, and from the retry timer.
-let deliveringAnswer = false
-async function deliverAnswer() {
-  if (deliveringAnswer || !ctx.state) return
-  deliveringAnswer = true
-  try {
-    for (const [round, scope] of Object.entries(ctx.local.scopes)) {
-      if (scope.published) continue
-      try {
-        await publishScope(ctx.net, ctx.sk, {
-          scopeId: scope.scopeId, generation: 1, scopeKey: unb64(scope.key),
-          payload: { text: scope.text, round: Number(round), prompt: scope.prompt },
-        })
-        scope.published = true
-        saveLocal()
-      } catch (e) { console.error('sealed copy not accepted yet — will retry', e) }
-    }
-    const s = ctx.state
-    const mine = s.phase === 'prompt' ? ctx.local.scopes[s.round] : null
-    if (mine && mine.prompt === s.promptId && !s.answered[ctx.pub])
-      await send(`ans:${s.round}:${ctx.pub}`, { type: 'answered', round: s.round })
-  } finally { deliveringAnswer = false }
-}
-
-// All live subscriptions in one place, so a pool rebuild can re-arm them.
-// The host is the source of truth — it never re-reads its own state events.
-function subscribeAll() {
-  if (!ctx.isHost) ctx.unsubs.push(ctx.net.subscribe(
-    [{ kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)] }],
-    applyStateEvent))
-  ctx.unsubs.push(ctx.net.subscribe(
-    [{ kinds: [1059], '#p': [ctx.pub] }],
-    () => refreshCollected()))
-  if (ctx.isHost) ctx.unsubs.push(ctx.net.subscribe(
-    [{ kinds: [KIND_APP], '#t': [ctx.gid] }],
-    (e) => hostIngest(e)))
-}
-
-// Sleeping phones leave zombie connections: they look open, deliver nothing,
-// and swallow everything sent. The state event is the liveness probe — it
-// always exists once a game has started, so a few consecutive misses means
-// the pipes are dead. Tear the whole pool down and rebuild it. No player
-// should ever need to reload the page by hand.
-let probeMisses = 0
-async function rebuildNet() {
-  for (const u of ctx.unsubs.splice(0)) { try { u() } catch { /* gone */ } }
-  try { ctx.net.close() } catch { /* gone */ }
-  ctx.net = new Net(ctx.relays)
-  subscribeAll()
-  if (ctx.isHost) { await hostCatchUp().catch(console.error); await publishState() }
-  deliverAnswer().catch(console.error)
-  autoEffects().catch(console.error)
-  refreshCollected()
-}
-
-// Poll fallback: every few seconds, and on every return to the foreground,
-// fetch what push should have brought — and rebuild the pool when even that
-// goes quiet.
-let polling = false
-async function pollNet() {
-  if (polling || !ctx.net || !ctx.gid) return
-  polling = true
-  try {
-    const [remote] = await ctx.net.query({
-      kinds: [KIND_APP], authors: [ctx.hostPub], '#d': [dState(ctx.gid)],
-    }).catch(() => [])
-    if (remote) {
-      probeMisses = 0
-      if (!ctx.isHost) applyStateEvent(remote)
-    } else if (ctx.state && ctx.state.phase !== 'lobby' && ++probeMisses >= 3) {
-      // the state event exists — three straight misses means dead pipes
-      probeMisses = 0
-      await rebuildNet()
-      return
-    }
-    if (ctx.isHost) {
-      if (await hostCatchUp()) onStateChanged()
-    } else {
-      refreshCollected()
-    }
-  } finally { polling = false }
-}
-
-let autoBusy = false
-async function autoEffects() {
-  const s = ctx.state
-  if (autoBusy || !s) return
-  autoBusy = true
-  try { await autoEffectsInner(s) } finally { autoBusy = false }
-}
-async function autoEffectsInner(s) {
-  const me = ctx.pub
-
-  // remember my counterpart for each round (window closes when pairs rotate) —
-  // round 0 (the warm-up) needs this too, its trades are the teaching moment
-  if (s.pairs?.length) {
-    const pair = s.pairs.find(p => p.includes(me))
-    if (pair) {
-      const other = pair[0] === me ? pair[1] : pair[0]
-      if (ctx.local.pairsByRound[s.round] !== other) {
-        ctx.local.pairsByRound[s.round] = other
-        saveLocal()
-      }
-    }
-  }
-
-  // auto-reveal once both commitments in my pair exist
-  if (s.phase === 'dilemma') {
-    const other = ctx.local.pairsByRound[s.round]
-    const mine = ctx.local.pending[s.round]
-    if (mine && !s.commits[me]) await send(`cmt:${s.round}:${me}`,
-      { type: 'commit', round: s.round, hash: commitHash(mine.choice, mine.nonce) })
-    if (mine && other && s.commits[me] && s.commits[other] && !s.choices[me])
-      await send(`rvl:${s.round}:${me}`,
-        { type: 'reveal', round: s.round, choice: mine.choice, nonce: mine.nonce })
-  }
-
-  // drawn from the bowl: surface my confession to the room — the one
-  // consented crossing from private to public outside the finale. Retried
-  // by the tick loop like every other debt; idempotent d tag.
-  if (s.phase === 'table_read' && s.tableRead?.by === me && !s.tableRead.text) {
-    const text = ctx.local.scopes[s.round]?.text
-    if (text) await send(`bwt:${s.round}:${me}`, { type: 'bowl_text', round: s.round, text })
-  }
-
-  // if I shared, deliver my secret to my counterpart — the trade itself
-  for (const [round, pend] of Object.entries(ctx.local.pending)) {
-    const r = Number(round)
-    const resolvedPast = s.round > r || (s.round === r && ['outcome', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final'].includes(s.phase))
-    const scope = ctx.local.scopes[r]
-    const other = ctx.local.pairsByRound[r]
-    // wait for the sealed copy to be accepted before handing over its key —
-    // a pointer to nothing would show the counterpart an endless "Opening…"
-    if (pend.choice === 'SHARE' && resolvedPast && scope && scope.published !== false &&
-        other && !ctx.local.granted[r]) {
-      await grant(ctx.net, ctx.sk, other, {
-        scopeId: scope.scopeId, generation: 1, scopeKey: unb64(scope.key),
-        scopeName: `r${r}`, relayHint: ctx.relays[0],
-      })
-      ctx.local.granted[r] = true
-      saveLocal()
-    }
-  }
-}
-
-let refreshing = false
-async function refreshCollected() {
-  if (refreshing || !ctx.net) return
-  refreshing = true
-  try {
-    const grants = latestGrants(await receiveGrants(ctx.net, ctx.sk))
-    let changed = false
-    for (const g of grants) {
-      const res = await fetchScope(ctx.net, g)
-      if (res.status !== 'ok' || !res.data?.round) continue
-      const key = `${g.publisher}:${res.data.round}`
-      if (ctx.local.collected[key] !== res.data.text) {
-        ctx.local.collected[key] = res.data.text
-        changed = true
-      }
-    }
-    if (changed) { saveLocal(); render() }
-  } finally { refreshing = false }
-}
+const send = (dSuffix, payload) =>
+  ctx.engine.send(dSuffix, payload).catch((e) => console.error('send failed', e))
+const refreshCollected = () => ctx.engine.refreshCollected()
 
 // ---------------------------------------------------------------- robot guests
 // Host-driven stand-in players, so one person can play a full night. Bots
@@ -502,7 +264,7 @@ async function botAct(bot) {
         const scopeKey = newScopeKey()
         data.scopes[s.round] = { scopeId, key: b64(scopeKey), text: line }
         save()
-        await publishScope(ctx.net, hexToBytes(bot.sk), {
+        await publishScope(ctx.engine.net, hexToBytes(bot.sk), {
           scopeId, generation: 1, scopeKey,
           payload: { text: line, round: s.round, prompt: s.promptId },
         }).catch(() => {})       // a refused seal must not stall the bot
@@ -591,7 +353,7 @@ async function botAct(bot) {
       const k = `gr:${rr}:${pub}`
       if (!claim(k)) continue
       try {
-        await grant(ctx.net, hexToBytes(bot.sk), other, {
+        await grant(ctx.engine.net, hexToBytes(bot.sk), other, {
           scopeId: scope.scopeId, generation: 1, scopeKey: unb64(scope.key),
           scopeName: `r${rr}`, relayHint: ctx.relays[0],
         })
@@ -607,10 +369,10 @@ async function botAct(bot) {
     const k = `stash:${pub}:${owed.map(c => `${c.owner.slice(0, 8)}:${c.round}`).join(',')}`
     if (claim(k)) {
       try {
-        const grants = latestGrants(await receiveGrants(ctx.net, hexToBytes(bot.sk)))
+        const grants = latestGrants(await receiveGrants(ctx.engine.net, hexToBytes(bot.sk)))
         let got = false
         for (const g of grants) {
-          const res = await fetchScope(ctx.net, g)
+          const res = await fetchScope(ctx.engine.net, g)
           if (res.status === 'ok' && res.data?.round !== undefined) {
             data.stash[`${g.publisher}:${res.data.round}`] = res.data.text
             got = true
@@ -706,30 +468,19 @@ async function onTap(ev) {
     return send('order', { type: 'order', order })
   }
   if (act === 'lock-secret') {
-    // Store first, respond instantly, deliver in the background with retries.
-    // The tap must never depend on the network — a slow or refusing relay
-    // used to kill this handler silently and the button looked dead.
+    // The tap must never depend on the network: the engine stores first and
+    // delivers in the background with retries.
     const text = $('#secret-input')?.value?.trim()
     if (!text) return
-    ctx.local.scopes[s.round] = {
-      scopeId: bytesToHex(crypto.getRandomValues(new Uint8Array(8))),
-      key: b64(newScopeKey()), text, prompt: s.promptId, published: false,
-    }
-    saveLocal()
-    render()
-    return deliverAnswer().catch(console.error)
+    ctx.engine.lockSecret(text).catch(console.error)
+    return render()
   }
   if (act === 'react')
     return send(`rx:${now()}:${ctx.pub}`, { type: 'react', emoji: el.dataset.e })
   if (act === 'promise')
     return send(`prm:${s.round}:${ctx.pub}`, { type: 'promise', round: s.round })
   if (act === 'choose') {
-    const choice = el.dataset.choice
-    const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
-    ctx.local.pending[s.round] = { choice, nonce }
-    saveLocal()
-    await send(`cmt:${s.round}:${ctx.pub}`,
-      { type: 'commit', round: s.round, hash: commitHash(choice, nonce) })
+    ctx.engine.choose(el.dataset.choice).catch(console.error)
     return render()
   }
   if (act === 'flip') { ctx.ui.flipped = !ctx.ui.flipped; return render() }
@@ -898,39 +649,18 @@ function beat(key) {
   return false
 }
 
+// The engine's own tick handles retries, polling, the deal auto-close, the
+// stall republish, and the stage watchdog. The view's tick is only what
+// needs pixels: countdown repaints and the robot guests' cadence.
 let tickN = 0
 function tick() {
   tickN++
-  // retry loop: anything owed to the table that hasn't been confirmed yet
-  // (locked answer, commit, reveal, trade delivery) gets another attempt
-  if (tickN % 4 === 0) {
-    deliverAnswer().catch(console.error)
-    autoEffects().catch(console.error)
-    botTick()
-  }
-  // pull what push should have brought — survives dead sockets after sleep
-  if (tickN % 8 === 0) pollNet().catch(console.error)
-  // an unconfirmed state push keeps re-sending until a relay takes it
-  if (ctx.isHost && ctx.ui.netStall && tickN % 4 === 2) publishState().catch(console.error)
+  if (tickN % 4 === 0) botTick()
   const s = ctx.state
   if (!s) return
   if (s.phase === 'deal' || s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort'))
     render()                            // countdown repaint
-  // the deal window closes itself: when the clock runs dry the host phone
-  // advances to the dilemma, once per window (the host can also tap Next)
-  if (ctx.isHost && s.phase === 'deal' && timerLeft(DEAL_SECS) === 0) {
-    const key = `${s.round}:${s.phaseAt}`
-    if (dealClosed !== key) {
-      dealClosed = key
-      send(`host:advance:${now()}`, { type: 'advance' })
-    }
-  }
-  // stage watchdog: the TV heartbeats; if it goes quiet the host declares it
-  // gone and every phone re-expands on the next state event
-  if (ctx.isHost && s.stage && Math.floor(Date.now() / 1000) - (s.stageSeen || 0) > STAGE_STALE_SECS)
-    send(`host:stage_gone:${now()}`, { type: 'stage_gone' })
 }
-let dealClosed = ''
 
 function timerLeft(total) {
   const left = total - (Math.floor(Date.now() / 1000) - (ctx.state.phaseAt || 0))
@@ -963,7 +693,7 @@ function render() {
   }[s.phase] || (() => ''))()
   const stageChip = s?.stage && amIn()
     ? `<div class="stage-chip">${esc(fill(UI.tvCodeChip, { code: s.code }))}</div>` : ''
-  const stallChip = ctx.ui.netStall
+  const stallChip = ctx.engine?.stalled
     ? `<div class="stall-chip">${esc(UI.reconnecting)}</div>` : ''
   app.innerHTML = html + stageChip + stallChip + (ctx.gid && s ? vSheetButton() : '') +
     (ctx.sheet ? vSheet() : '') + (ctx.ui.mcOpen ? vMcModal() : '')
