@@ -390,10 +390,15 @@ export class Engine {
       if (text) await this.#send(`bwt:${s.round}:${me}`, { type: 'bowl_text', round: s.round, text })
     }
 
-    // if I shared, deliver my secret to my counterpart — the trade itself
+    // if I shared, deliver my secret to my counterpart — the trade itself.
+    // The hand-over goes out the moment MY reveal is public, not when the
+    // whole round resolves: a SHARE reaches the counterpart whatever they
+    // chose (trade or betrayal), so there's nothing to wait for — and the
+    // reader shouldn't sit on "Opening…" while we do (playtest feedback).
     for (const [round, pend] of Object.entries(this.local.pending)) {
       const r = Number(round)
-      const done = s.round > r || (s.round === r &&
+      const done = (s.round === r && s.choices[me] === 'SHARE') ||
+        s.round > r || (s.round === r &&
         ['outcome', 'table_read', 'debrief', 'scoreboard', 'finale_intro', 'finale', 'final'].includes(s.phase))
       const scope = this.local.scopes[r]
       const other = this.local.pairsByRound[r]

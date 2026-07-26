@@ -114,10 +114,10 @@ export const UI = {
   outcomeStalemate: '{a} and {b} both held. Nothing moves.',
   readSecret: 'Read {name}’s secret',
   eyesOnly: 'FOR YOUR EYES ONLY',
-  eyesOnlyHint: 'Angle your screen. This is yours now.',
+  eyesOnlyHint: 'Only your phone has this — nobody else can see it. Read it, keep a straight face, then tap Got it.',
   gotIt: 'Got it',
   nothingReceived: 'You gave. You got nothing. That’s the game.',
-  fetchingSecret: 'Opening…',
+  fetchingSecret: 'On its way — it travels phone to phone. Give it a breath…',
 
   scoreboardTitle: 'Scores after round {n}',
   daggerLegend: '🗡 = took a secret and gave nothing back',

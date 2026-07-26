@@ -651,13 +651,26 @@ function beat(key) {
 
 // The engine's own tick handles retries, polling, the deal auto-close, the
 // stall republish, and the stage watchdog. The view's tick is only what
-// needs pixels: countdown repaints and the robot guests' cadence.
+// needs pixels: countdown repaints, the robot guests' cadence — and one
+// impatience: while a reveal card of mine is waiting on its words, pull
+// for them every other second instead of the engine's easy stroll.
+const awaitingSecret = (s) => {
+  const o = s.outcomes[s.outcomeStep]
+  if (!o) return false
+  const iReceive = (o.kind === 'trade' && [o.a, o.b].includes(ctx.pub)) ||
+                   (o.kind === 'betrayal' && o.winner === ctx.pub)
+  if (!iReceive) return false
+  const from = [o.a, o.b].find(p => p !== ctx.pub)
+  return !ctx.local.collected[`${from}:${s.round}`]
+}
+
 let tickN = 0
 function tick() {
   tickN++
   if (tickN % 4 === 0) botTick()
   const s = ctx.state
   if (!s) return
+  if (s.phase === 'outcome' && tickN % 2 === 0 && awaitingSecret(s)) refreshCollected()
   if (s.phase === 'deal' || s.phase === 'dilemma' || (s.phase === 'finale' && s.finale?.step === 'extort'))
     render()                            // countdown repaint
 }
