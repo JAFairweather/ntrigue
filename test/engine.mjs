@@ -77,6 +77,13 @@ for (let r = 1; r <= 4; r++) {
     }
   }
   await host.waitFor(s => s.phase === 'outcome')
+  if (r === 2) {
+    // timer honesty: a burst of reactions shoves the strictly-increasing
+    // event-id counter well past the wall clock; the NEXT card's phaseAt
+    // must still be wall time (first playtest: timers grew every round)
+    for (let i = 0; i < 8; i++) for (const g of guests) await g.react('😱')
+    await host.waitFor(s => (s.reactions?.counts?.['😱'] || 0) >= 24)
+  }
   if (r === 3) assert.ok(host.state.outcomes.some(o => o.broken?.length), 'the broken promise is marked')
   await host.advance()                                 // outcome pair 2
   await host.advance()                                 // → table read (R1) or scoreboard
@@ -89,6 +96,10 @@ for (let r = 1; r <= 4; r++) {
     await host.advance()
   }
   await host.waitFor(s => s.phase === 'scoreboard')
+  if (r === 2) {
+    const drift = host.state.phaseAt - Date.now() / 1000
+    assert.ok(Math.abs(drift) < 4, `phaseAt is wall time, not the event counter (drift ${drift.toFixed(1)}s)`)
+  }
   await host.advance()
 }
 

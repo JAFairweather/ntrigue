@@ -9,7 +9,9 @@ export const KIND_APP = 30078          // NIP-78 app data: game state + actions
 export const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net']
 
 // Strictly increasing timestamps so rapid republishes of the same addressable
-// event never tie on created_at and lose NIP-01 replacement.
+// event never tie on created_at and lose NIP-01 replacement. NOTE: this
+// counter runs AHEAD of the clock under event bursts — use it for event ids
+// and created_at ONLY, never to stamp durations or countdown anchors.
 let lastTs = 0
 export const now = () => (lastTs = Math.max(Math.floor(Date.now() / 1000), lastTs + 1))
 
