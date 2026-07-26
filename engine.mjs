@@ -313,10 +313,14 @@ export class Engine {
     await this.#publishState()
   }
 
+  // phaseAt anchors every countdown, so it must be WALL time. net.mjs's
+  // now() is strictly increasing per event (NIP-01 replacement needs it)
+  // and drifts ahead of the clock under bursts — stamping card time with
+  // it made the timers grow longer every round (first-playtest bug).
   #stampPhase(prev, next) {
     if (next.phase !== prev.phase || next.outcomeStep !== prev.outcomeStep ||
         next.finale?.turn !== prev.finale?.turn || next.finale?.step !== prev.finale?.step)
-      next.phaseAt = now()
+      next.phaseAt = Math.floor(Date.now() / 1000)
   }
 
   async #publishState() {
