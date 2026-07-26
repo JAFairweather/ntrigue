@@ -15,7 +15,12 @@
 import { generateSecretKey, getPublicKey, bytesToHex, hexToBytes } from './vendor/nostr-tools.js'
 import { publishScope, grant, receiveGrants, latestGrants, fetchScope, newScopeKey } from './nipxx.mjs'
 import { Net, KIND_APP, DEFAULT_RELAYS, dState, sendAction, parseAction, now, codeTag, findGameByCode } from './net.mjs'
-import { initialState, reduce, commitHash, unspentOf, SCHEMA_VERSION, DEAL_SECS } from './state.mjs'
+import { initialState, reduce, commitHash, unspentOf, SCHEMA_VERSION, DEAL_SECS, STAGE_STALE_SECS } from './state.mjs'
+
+// scope keys live in `local` as base64 so a browser embedder can JSON the
+// whole thing straight into localStorage
+const b64 = (bytes) => btoa(String.fromCharCode(...bytes))
+const unb64 = (str) => Uint8Array.from(atob(str), c => c.charCodeAt(0))
 
 // Node loads the deck from disk; a browser embedder passes `content` in
 // (the dynamic import keeps this file bundleable for the view someday).
@@ -60,7 +65,7 @@ export class Engine {
     return new Engine({ ...found, relays: found.relays?.length ? found.relays : relays, content })
   }
 
-  constructor({ gid, relays, hostPub, sk, content }) {
+  constructor({ gid, relays, hostPub, sk, content, local, onLocal, restoreState }) {
     this.gid = gid
     this.relays = relays?.length ? relays : DEFAULT_RELAYS
     this.hostPub = hostPub
@@ -71,10 +76,15 @@ export class Engine {
     this.state = null
     this.listeners = new Set()
     this.unsubs = []
-    // per-game client data, same shape the app keeps in localStorage
-    this.local = { scopes: {}, pending: {}, granted: {}, pairsByRound: {}, collected: {} }
+    // per-game client data — a browser embedder passes its persisted copy in
+    // and an onLocal callback that fires after every mutation (to save it)
+    this.local = { scopes: {}, pending: {}, granted: {}, pairsByRound: {}, collected: {}, ...(local || {}) }
+    this.onLocal = onLocal || null
+    this.restoreState = restoreState || null   // host: last published state, rejoin-proof
+    this.stalled = false                       // a state push nobody accepted (host)
     this.seenStateTs = 0
     this.dealClosed = ''
+    this.probeMisses = 0
     this.busy = { deliver: false, effects: false, collect: false }
   }
 
@@ -87,20 +97,41 @@ export class Engine {
     }).catch(() => [])
     if (remote) this.#applyStateEvent(remote)
     else if (this.isHost)
-      this.state = initialState({ gid: this.gid, host: this.pub, relays: this.relays })
+      this.state = this.restoreState ||
+        initialState({ gid: this.gid, host: this.pub, relays: this.relays })
     if (this.isHost) await this.#hostCatchUp()
+    this.#subscribeAll()
+    if (this.isHost && !remote) await this.#publishState()
+    if (tick) this.timer = setInterval(() => this.#tick().catch(() => {}), 1000)
+    return this
+  }
+
+  #subscribeAll() {
     if (!this.isHost) this.unsubs.push(this.net.subscribe(
       [{ kinds: [KIND_APP], authors: [this.hostPub], '#d': [dState(this.gid)] }],
       (e) => this.#applyStateEvent(e)))
     this.unsubs.push(this.net.subscribe(
       [{ kinds: [1059], '#p': [this.pub] }], () => this.#refreshCollected()))
-    if (this.isHost) {
-      this.unsubs.push(this.net.subscribe(
-        [{ kinds: [KIND_APP], '#t': [this.gid] }], (e) => this.#hostIngest(e)))
-      if (!remote) await this.#publishState()
-    }
-    if (tick) this.timer = setInterval(() => this.#tick().catch(() => {}), 1000)
-    return this
+    if (this.isHost) this.unsubs.push(this.net.subscribe(
+      [{ kinds: [KIND_APP], '#t': [this.gid] }], (e) => this.#hostIngest(e)))
+  }
+
+  // Sleeping phones leave zombie connections: they look open and deliver
+  // nothing. When even the poll goes quiet, tear the pool down and rebuild.
+  async rebuildNet() {
+    for (const u of this.unsubs.splice(0)) { try { u() } catch { /* gone */ } }
+    try { this.net.close() } catch { /* gone */ }
+    this.net = new Net(this.relays)
+    this.#subscribeAll()
+    if (this.isHost) { await this.#hostCatchUp().catch(() => {}); await this.#publishState() }
+    await this.wake()
+  }
+
+  /** Back from the background: fetch and flush everything owed, right now. */
+  async wake() {
+    await this.#deliverAnswer().catch(() => {})
+    await this.#autoEffects().catch(() => {})
+    await this.#refreshCollected().catch(() => {})
   }
 
   close() {
@@ -111,6 +142,8 @@ export class Engine {
 
   // ---------------------------------------------------------------- follow
 
+  /** Listeners get (state, prev); prev is undefined for off-state pings
+   *  (e.g. a collected secret arriving). */
   onChange(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn) }
 
   /** Resolve when the state matches. The workhorse for agents and tests. */
@@ -142,8 +175,9 @@ export class Engine {
     const s = this.state
     this.local.scopes[s.round] = {
       scopeId: bytesToHex(crypto.getRandomValues(new Uint8Array(8))),
-      key: newScopeKey(), text, prompt: s.promptId, published: false,
+      key: b64(newScopeKey()), text, prompt: s.promptId, published: false,
     }
+    this.onLocal?.()
     return this.#deliverAnswer()
   }
 
@@ -158,6 +192,7 @@ export class Engine {
     const s = this.state
     const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
     this.local.pending[s.round] = { choice, nonce }
+    this.onLocal?.()
     return this.#send(`cmt:${s.round}:${this.pub}`,
       { type: 'commit', round: s.round, hash: commitHash(choice, nonce) })
   }
@@ -204,6 +239,16 @@ export class Engine {
   /** My private stash: `${ownerPub}:${round}` -> text, as grants arrive. */
   get collected() { return this.local.collected }
 
+  /** Generic escape hatch: any reducer action, with its idempotent id. */
+  send(dSuffix, payload) { return this.#send(dSuffix, payload) }
+
+  /** Host-side local apply, bypassing the wire — robot guests and the AI
+   *  MC's quip upgrades drive through here. */
+  applyLocal(act) { return this.#hostApply(act) }
+
+  /** Re-pull my incoming grants now (e.g. a reveal card missing its text). */
+  refreshCollected() { return this.#refreshCollected() }
+
   // ---------------------------------------------------------------- plumbing
   // Ported from app.mjs, minus the DOM: the host folds actions through the
   // pure reducer and republishes; players follow the latest state and pay
@@ -221,14 +266,19 @@ export class Engine {
     try { s = JSON.parse(event.content) } catch { return }
     if (!s || s.v !== SCHEMA_VERSION || s.gid !== this.gid) return
     this.seenStateTs = event.created_at
+    const prev = this.state
     this.state = s
-    this.#onStateChanged()
+    this.#onStateChanged(prev)
   }
 
-  #onStateChanged() {
+  #onStateChanged(prev) {
     this.#deliverAnswer().catch(() => {})
     this.#autoEffects().catch(() => {})
-    for (const fn of this.listeners) { try { fn(this.state) } catch { /* listener's problem */ } }
+    this.#notify(prev)
+  }
+
+  #notify(prev) {
+    for (const fn of this.listeners) { try { fn(this.state, prev) } catch { /* listener's problem */ } }
   }
 
   async #hostCatchUp() {
@@ -259,7 +309,7 @@ export class Engine {
     if (next === prev) return
     this.#stampPhase(prev, next)
     this.state = next
-    this.#onStateChanged()
+    this.#onStateChanged(prev)
     await this.#publishState()
   }
 
@@ -270,9 +320,17 @@ export class Engine {
   }
 
   async #publishState() {
+    this.local.lastState = this.state          // rejoin-proof: survives a host refresh
+    this.onLocal?.()
+    // an unconfirmed push flags `stalled` (the view shows it) and the tick
+    // keeps re-sending — replacement, never duplication
     try {
       await sendAction(this.net, this.sk, this.gid, 'state', this.state, [codeTag(this.state.code)])
-    } catch (e) { console.error('state push failed', e.detail || e.message) }
+      if (this.stalled) { this.stalled = false; this.#notify() }
+    } catch (e) {
+      console.error('state push failed', e.detail || e.message)
+      if (!this.stalled) { this.stalled = true; this.#notify() }
+    }
   }
 
   async #deliverAnswer() {
@@ -283,10 +341,11 @@ export class Engine {
         if (scope.published) continue
         try {
           await publishScope(this.net, this.sk, {
-            scopeId: scope.scopeId, generation: 1, scopeKey: scope.key,
+            scopeId: scope.scopeId, generation: 1, scopeKey: unb64(scope.key),
             payload: { text: scope.text, round: Number(round), prompt: scope.prompt },
           })
           scope.published = true
+          this.onLocal?.()
         } catch { /* retried by the tick */ }
       }
       const s = this.state
@@ -305,7 +364,13 @@ export class Engine {
   async #autoEffectsInner(s) {
     const me = this.pub
     const pair = s.pairs?.find(p => p.includes(me))
-    if (pair) this.local.pairsByRound[s.round] = pair[0] === me ? pair[1] : pair[0]
+    if (pair) {
+      const other = pair[0] === me ? pair[1] : pair[0]
+      if (this.local.pairsByRound[s.round] !== other) {
+        this.local.pairsByRound[s.round] = other
+        this.onLocal?.()
+      }
+    }
 
     // re-send an unconfirmed commit, then auto-reveal once both exist
     if (s.phase === 'dilemma') {
@@ -335,10 +400,11 @@ export class Engine {
       if (pend.choice === 'SHARE' && done && scope && scope.published !== false &&
           other && !this.local.granted[r]) {
         await grant(this.net, this.sk, other, {
-          scopeId: scope.scopeId, generation: 1, scopeKey: scope.key,
+          scopeId: scope.scopeId, generation: 1, scopeKey: unb64(scope.key),
           scopeName: `r${r}`, relayHint: this.relays[0],
         })
         this.local.granted[r] = true
+        this.onLocal?.()
       }
     }
   }
@@ -348,11 +414,16 @@ export class Engine {
     this.busy.collect = true
     try {
       const grants = latestGrants(await receiveGrants(this.net, this.sk))
+      let changed = false
       for (const g of grants) {
         const res = await fetchScope(this.net, g)
-        if (res.status === 'ok' && res.data?.round !== undefined)
+        if (res.status === 'ok' && res.data?.round !== undefined &&
+            this.local.collected[`${g.publisher}:${res.data.round}`] !== res.data.text) {
           this.local.collected[`${g.publisher}:${res.data.round}`] = res.data.text
+          changed = true
+        }
       }
+      if (changed) { this.onLocal?.(); this.#notify() }
     } finally { this.busy.collect = false }
   }
 
@@ -365,12 +436,23 @@ export class Engine {
     }
     const s = this.state
     if (!s) return
-    // pull what push should have brought — survives dead sockets
+    // an unconfirmed state push keeps re-sending until a relay takes it
+    if (this.isHost && this.stalled && this.tickN % 4 === 2) await this.#publishState()
+    // pull what push should have brought — survives dead sockets after
+    // sleep; three straight misses on an existing state means the pipes
+    // are dead, so rebuild the whole pool
     if (this.tickN % 8 === 0) {
       const [remote] = await this.net.query({
         kinds: [KIND_APP], authors: [this.hostPub], '#d': [dState(this.gid)],
       }).catch(() => [])
-      if (remote && !this.isHost) this.#applyStateEvent(remote)
+      if (remote) {
+        this.probeMisses = 0
+        if (!this.isHost) this.#applyStateEvent(remote)
+      } else if (s.phase !== 'lobby' && ++this.probeMisses >= 3) {
+        this.probeMisses = 0
+        await this.rebuildNet()
+        return
+      }
       if (this.isHost) await this.#hostCatchUp().catch(() => {})
     }
     // the deal window closes itself on the host
@@ -379,6 +461,10 @@ export class Engine {
       const key = `${s.round}:${s.phaseAt}`
       if (this.dealClosed !== key) { this.dealClosed = key; await this.advance() }
     }
+    // stage watchdog: the TV heartbeats; if it goes quiet the host declares
+    // it gone and every phone re-expands on the next state event
+    if (this.isHost && s.stage && Math.floor(Date.now() / 1000) - (s.stageSeen || 0) > STAGE_STALE_SECS)
+      await this.#send(`host:stage_gone:${now()}`, { type: 'stage_gone' })
   }
 }
 
@@ -453,9 +539,11 @@ async function cliBot(argv) {
   })
 }
 
-const [, self, cmd, ...rest] = process.argv
-if (import.meta.url === `file://${self}`) {
-  if (cmd === 'host') cliHost(rest).catch((e) => { console.error(e.message); process.exit(1) })
-  else if (cmd === 'bot') cliBot(rest).catch((e) => { console.error(e.message); process.exit(1) })
-  else if (cmd) { console.error('usage: node engine.mjs host|bot …'); process.exit(1) }
+if (typeof process !== 'undefined' && process.argv) {   // Node only — browsers just import
+  const [, self, cmd, ...rest] = process.argv
+  if (import.meta.url === `file://${self}`) {
+    if (cmd === 'host') cliHost(rest).catch((e) => { console.error(e.message); process.exit(1) })
+    else if (cmd === 'bot') cliBot(rest).catch((e) => { console.error(e.message); process.exit(1) })
+    else if (cmd) { console.error('usage: node engine.mjs host|bot …'); process.exit(1) }
+  }
 }
